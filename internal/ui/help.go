@@ -6,6 +6,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+const helpKeyColumnWidth = 12 // Width for key column in help text
+
 // HelpOverlay displays keyboard shortcuts in a centered overlay
 type HelpOverlay struct {
 	visible bool
@@ -84,52 +86,32 @@ func (h HelpOverlay) View() string {
 	content.WriteString(sectionStyle.Render("ACTIONS"))
 	content.WriteString("\n")
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "Enter", "Zoom into directory"))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "Backspace", "Zoom out"))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "Esc/⌫", "Go back / Close overlay"))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "Space", "Select drive"))
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "r", "Rescan drive"))
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "d", "Toggle diff mode"))
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "s", "Cycle sort mode"))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "1-9", "Select drive"))
 
 	// Other section
 	content.WriteString(sectionStyle.Render("OTHER"))
 	content.WriteString("\n")
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "?", "Toggle this help"))
-	content.WriteString(formatHelpLineNoNewline(keyStyle, descStyle, "q/Esc", "Quit"))
+	content.WriteString(formatHelpLineNoNewline(keyStyle, descStyle, "q", "Quit"))
 
 	box := boxStyle.Render(content.String())
 
-	// Center the box in the terminal
-	boxWidth := lipgloss.Width(box)
-	boxHeight := lipgloss.Height(box)
-
-	// Calculate padding to center
-	horizontalPad := (h.width - boxWidth) / 2
-	verticalPad := (h.height - boxHeight) / 2
-
-	if horizontalPad < 0 {
-		horizontalPad = 0
-	}
-	if verticalPad < 0 {
-		verticalPad = 0
-	}
-
-	// Create centered overlay
-	centeredBox := lipgloss.NewStyle().
-		MarginLeft(horizontalPad).
-		MarginTop(verticalPad).
-		Render(box)
-
-	return centeredBox
+	// Center the box using lipgloss.Place
+	return lipgloss.Place(h.width, h.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 // formatHelpLine formats a single help line with key and description
 func formatHelpLine(keyStyle, descStyle lipgloss.Style, key, desc string) string {
-	return keyStyle.Width(12).Render(key) + descStyle.Render(desc) + "\n"
+	return keyStyle.Width(helpKeyColumnWidth).Render(key) + descStyle.Render(desc) + "\n"
 }
 
 // formatHelpLineNoNewline formats a help line without trailing newline
 func formatHelpLineNoNewline(keyStyle, descStyle lipgloss.Style, key, desc string) string {
-	return keyStyle.Width(12).Render(key) + descStyle.Render(desc)
+	return keyStyle.Width(helpKeyColumnWidth).Render(key) + descStyle.Render(desc)
 }
 
 // HelpBar renders a bottom help bar with key hints
@@ -141,10 +123,11 @@ func HelpBar(width int) string {
 		key  string
 		desc string
 	}{
-		{"arrows/hjkl", "navigate"},
+		{"↑↓←→/hjkl", "navigate"},
 		{"Enter", "zoom in"},
-		{"Backspace", "zoom out"},
-		{"Tab", "switch panel"},
+		{"Esc", "back"},
+		{"Tab", "panel"},
+		{"Space", "drives"},
 		{"?", "help"},
 		{"q", "quit"},
 	}

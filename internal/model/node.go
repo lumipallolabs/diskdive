@@ -4,7 +4,7 @@ package model
 type Node struct {
 	Path     string
 	Name     string
-	Size     int64 // size in bytes (files only, dirs use TotalSize())
+	Size     int64 // size in bytes (cached total for dirs, direct size for files)
 	IsDir    bool
 	Children []*Node
 	Parent   *Node
@@ -15,19 +15,22 @@ type Node struct {
 	IsDeleted bool  // only appears in diff view
 }
 
-// TotalSize returns the total size of this node and all children
+// TotalSize returns the cached total size (call ComputeSizes first)
 func (n *Node) TotalSize() int64 {
+	return n.Size
+}
+
+// ComputeSizes calculates and caches sizes for the entire tree
+// Call this once after building/loading the tree
+func (n *Node) ComputeSizes() int64 {
 	if !n.IsDir {
-		return n.Size
-	}
-	// If no children, return the Size field directly (may be cached/pre-computed)
-	if len(n.Children) == 0 {
 		return n.Size
 	}
 	var total int64
 	for _, child := range n.Children {
-		total += child.TotalSize()
+		total += child.ComputeSizes()
 	}
+	n.Size = total
 	return total
 }
 

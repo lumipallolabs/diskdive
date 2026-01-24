@@ -4,29 +4,21 @@ import "github.com/charmbracelet/bubbles/key"
 
 // KeyMap defines all keyboard shortcuts
 type KeyMap struct {
-	Up          key.Binding
-	Down        key.Binding
-	Left        key.Binding
-	Right       key.Binding
-	Top         key.Binding
-	Bottom      key.Binding
-	Tab         key.Binding
-	Enter       key.Binding
-	Back        key.Binding
-	Rescan      key.Binding
-	ToggleDiff  key.Binding
-	CycleSort   key.Binding
-	Help        key.Binding
-	Quit        key.Binding
-	Drive1      key.Binding
-	Drive2      key.Binding
-	Drive3      key.Binding
-	Drive4      key.Binding
-	Drive5      key.Binding
-	Drive6      key.Binding
-	Drive7      key.Binding
-	Drive8      key.Binding
-	Drive9      key.Binding
+	Up           key.Binding
+	Down         key.Binding
+	Left         key.Binding
+	Right        key.Binding
+	Top          key.Binding
+	Bottom       key.Binding
+	Tab          key.Binding
+	Enter        key.Binding
+	Back         key.Binding
+	Rescan       key.Binding
+	ToggleDiff   key.Binding
+	CycleSort    key.Binding
+	Help         key.Binding
+	Quit         key.Binding
+	SelectDrive  key.Binding
 }
 
 // DefaultKeyMap returns the default key bindings
@@ -65,8 +57,8 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("enter", "zoom in"),
 		),
 		Back: key.NewBinding(
-			key.WithKeys("backspace"),
-			key.WithHelp("backspace", "zoom out"),
+			key.WithKeys("backspace", "esc"),
+			key.WithHelp("esc/⌫", "back"),
 		),
 		Rescan: key.NewBinding(
 			key.WithKeys("r"),
@@ -85,18 +77,13 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("?", "help"),
 		),
 		Quit: key.NewBinding(
-			key.WithKeys("q", "esc", "ctrl+c"),
+			key.WithKeys("q", "ctrl+c", "ctrl+d"),
 			key.WithHelp("q", "quit"),
 		),
-		Drive1: key.NewBinding(key.WithKeys("1")),
-		Drive2: key.NewBinding(key.WithKeys("2")),
-		Drive3: key.NewBinding(key.WithKeys("3")),
-		Drive4: key.NewBinding(key.WithKeys("4")),
-		Drive5: key.NewBinding(key.WithKeys("5")),
-		Drive6: key.NewBinding(key.WithKeys("6")),
-		Drive7: key.NewBinding(key.WithKeys("7")),
-		Drive8: key.NewBinding(key.WithKeys("8")),
-		Drive9: key.NewBinding(key.WithKeys("9")),
+		SelectDrive: key.NewBinding(
+			key.WithKeys(" "),
+			key.WithHelp("Space", "select drive"),
+		),
 	}
 }
 

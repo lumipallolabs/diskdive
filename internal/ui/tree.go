@@ -5,8 +5,11 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/samuli/diskdive/internal/model"
 )
+
+const treeSizeBarWidth = 4 // Width of size proportion bar [████]
 
 // TreePanel displays the folder tree
 type TreePanel struct {
@@ -101,6 +104,18 @@ func (t *TreePanel) Expand() {
 	}
 }
 
+// Toggle toggles expand/collapse of current folder
+func (t *TreePanel) Toggle() {
+	if node := t.Selected(); node != nil && node.IsDir {
+		if t.expanded[node.Path] {
+			delete(t.expanded, node.Path)
+		} else {
+			t.expanded[node.Path] = true
+		}
+		t.updateVisible()
+	}
+}
+
 // GoToTop moves to first item
 func (t *TreePanel) GoToTop() {
 	t.cursor = 0
@@ -157,6 +172,68 @@ func (t TreePanel) getDepth(node *model.Node) int {
 	return depth
 }
 
+// RequiredWidth calculates the minimum width needed to display all visible content
+func (t TreePanel) RequiredWidth() int {
+	if t.root == nil || len(t.visible) == 0 {
+		return 30
+	}
+
+	maxWidth := 0
+	for _, node := range t.visible {
+		// Build the line exactly as View() does, then measure display width
+		line := t.buildLine(node)
+		width := lipgloss.Width(line)
+		if width > maxWidth {
+			maxWidth = width
+		}
+	}
+
+	// Add border width (2 for left+right)
+	return maxWidth + 2
+}
+
+// buildLine creates the text content for a node (same logic as View)
+func (t TreePanel) buildLine(node *model.Node) string {
+	depth := t.getDepth(node)
+
+	prefix := strings.Repeat("  ", depth)
+	if node.IsDir {
+		if t.expanded[node.Path] {
+			prefix += "\u25bc " // down triangle
+		} else {
+			prefix += "\u25b6 " // right triangle
+		}
+	} else {
+		prefix += "  "
+	}
+
+	name := node.Name
+	size := FormatSize(node.TotalSize())
+
+	var sizeBar string
+	if node.IsDir && node.Parent != nil && node.Parent.TotalSize() > 0 {
+		pct := float64(node.TotalSize()) / float64(node.Parent.TotalSize())
+		barW := treeSizeBarWidth
+		filled := int(pct * float64(barW))
+		sizeBar = "[" + strings.Repeat("\u2588", filled) + strings.Repeat("\u2591", barW-filled) + "]"
+	}
+
+	var changeStr string
+	if t.showDiff {
+		if node.IsNew {
+			changeStr = "NEW"
+		} else if change := node.SizeChange(); change != 0 {
+			if change > 0 {
+				changeStr = fmt.Sprintf("+%s", FormatSize(change))
+			} else {
+				changeStr = FormatSize(change)
+			}
+		}
+	}
+
+	return fmt.Sprintf("%s%s %s %s %s", prefix, name, sizeBar, size, changeStr)
+}
+
 // View renders the tree
 func (t TreePanel) View() string {
 	if t.root == nil {
@@ -193,7 +270,7 @@ func (t TreePanel) View() string {
 		var sizeBar string
 		if node.IsDir && node.Parent != nil && node.Parent.TotalSize() > 0 {
 			pct := float64(node.TotalSize()) / float64(node.Parent.TotalSize())
-			barW := 4
+			barW := treeSizeBarWidth
 			filled := int(pct * float64(barW))
 			sizeBar = "[" + strings.Repeat("\u2588", filled) + strings.Repeat("\u2591", barW-filled) + "]"
 		}
@@ -215,12 +292,24 @@ func (t TreePanel) View() string {
 		// Compose line
 		line := fmt.Sprintf("%s%s %s %s %s", prefix, name, sizeBar, size, changeStr)
 
-		// Apply selection style
+		// Determine color based on node type and diff state (matching treemap colors)
+		var itemStyle lipgloss.Style
 		if i == t.cursor && t.focused {
-			line = TreeItemSelected.Width(t.width - 2).Render(line)
+			itemStyle = TreeItemSelected.Width(t.width - 2)
+		} else if t.showDiff && node.IsNew {
+			itemStyle = lipgloss.NewStyle().Foreground(ColorNew).Width(t.width - 2)
+		} else if t.showDiff && node.SizeChange() > 0 {
+			itemStyle = lipgloss.NewStyle().Foreground(ColorGrew).Width(t.width - 2)
+		} else if t.showDiff && node.SizeChange() < 0 {
+			itemStyle = lipgloss.NewStyle().Foreground(ColorShrunk).Width(t.width - 2)
+		} else if node.IsDir {
+			// Directory: light blue (matches treemap)
+			itemStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7DD3FC")).Width(t.width - 2)
 		} else {
-			line = TreeItemStyle.Width(t.width - 2).Render(line)
+			// File: light grey (matches treemap)
+			itemStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E4E4E7")).Width(t.width - 2)
 		}
+		line = itemStyle.Render(line)
 
 		lines = append(lines, line)
 	}

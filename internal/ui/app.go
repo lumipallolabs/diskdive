@@ -43,6 +43,9 @@ func (s SortMode) String() string {
 	}
 }
 
+// scanStartMsg triggers the actual scan start (after UI has rendered)
+type scanStartMsg struct{}
+
 // scanCompleteMsg is sent when a scan finishes
 type scanCompleteMsg struct {
 	root *model.Node
@@ -57,10 +60,11 @@ type scanProgressMsg struct {
 // App is the main application model
 type App struct {
 	// Components
-	header  Header
-	tree    TreePanel
-	treemap TreemapPanel
-	help    HelpOverlay
+	header        Header
+	tree          TreePanel
+	treemap       TreemapPanel
+	help          HelpOverlay
+	driveSelector DriveSelector
 
 	// State
 	keys    KeyMap
@@ -89,20 +93,27 @@ func NewApp() App {
 	drives, _ := model.GetDrives()
 
 	app := App{
-		header:      NewHeader(drives),
-		tree:        NewTreePanel(),
-		treemap:     NewTreemapPanel(),
-		help:        NewHelpOverlay(),
-		keys:        DefaultKeyMap(),
-		cache:       cache.New(cache.DefaultDir()),
-		scanner:     scanner.NewWalker(8),
-		drives:      drives,
-		activePanel: PanelTree,
-		sortMode:    SortBySize,
+		header:        NewHeader(drives),
+		tree:          NewTreePanel(),
+		treemap:       NewTreemapPanel(),
+		help:          NewHelpOverlay(),
+		driveSelector: NewDriveSelector(drives),
+		keys:          DefaultKeyMap(),
+		cache:         cache.New(cache.DefaultDir()),
+		scanner:       scanner.NewWalker(8),
+		drives:        drives,
+		activePanel:   PanelTree,
+		sortMode:      SortBySize,
+		scanning:      len(drives) > 0, // Will start scanning on init
 	}
 
 	app.tree.SetFocused(true)
 	app.treemap.SetFocused(false)
+
+	// Set initial scanning status if we have drives
+	if len(drives) > 0 {
+		app.header.SetScanning(true, "")
+	}
 
 	return app
 }
@@ -110,8 +121,11 @@ func NewApp() App {
 // Init implements tea.Model
 func (a App) Init() tea.Cmd {
 	// Start scanning first drive if available
+	// We send scanStartMsg first to allow the UI to render the scanning state
 	if len(a.drives) > 0 {
-		return a.startScan(a.drives[0].Path)
+		return func() tea.Msg {
+			return scanStartMsg{}
+		}
 	}
 	return nil
 }
@@ -136,6 +150,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return a.handleKey(msg)
+
+	case scanStartMsg:
+		// Now actually start the scan
+		if len(a.drives) > 0 {
+			return a, a.startScan(a.drives[0].Path)
+		}
+		return a, nil
 
 	case scanCompleteMsg:
 		a.scanning = false
@@ -165,6 +186,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.header.SetScanning(false, "")
 		a.err = nil
 
+		// Recalculate layout now that we have data (tree width depends on content)
+		a.updateLayout()
+
 		return a, nil
 
 	case scanProgressMsg:
@@ -182,9 +206,28 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Help overlay takes precedence
 	if a.help.IsVisible() {
-		if key.Matches(msg, a.keys.Help) || key.Matches(msg, a.keys.Quit) {
+		if key.Matches(msg, a.keys.Help) || key.Matches(msg, a.keys.Back) {
 			a.help.SetVisible(false)
 			return a, nil
+		}
+		return a, nil
+	}
+
+	// Drive selector overlay
+	if a.driveSelector.IsVisible() {
+		switch {
+		case key.Matches(msg, a.keys.Back):
+			a.driveSelector.SetVisible(false)
+			return a, nil
+		case key.Matches(msg, a.keys.Up):
+			a.driveSelector.MoveUp()
+			return a, nil
+		case key.Matches(msg, a.keys.Down):
+			a.driveSelector.MoveDown()
+			return a, nil
+		case key.Matches(msg, a.keys.Enter):
+			a.driveSelector.SetVisible(false)
+			return a, a.selectDrive(a.driveSelector.Selected())
 		}
 		return a, nil
 	}
@@ -195,6 +238,12 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, a.keys.Help):
 		a.help.Toggle()
+		return a, nil
+
+	case key.Matches(msg, a.keys.SelectDrive):
+		if len(a.drives) > 0 {
+			a.driveSelector.SetVisible(true)
+		}
 		return a, nil
 
 	case key.Matches(msg, a.keys.Tab):
@@ -234,6 +283,7 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, a.keys.Left):
 		if a.activePanel == PanelTree {
 			a.tree.Collapse()
+			a.updateLayout()
 		} else {
 			a.treemap.MoveToBlock(-1, 0)
 			a.syncSelectionFromTreemap()
@@ -243,6 +293,7 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, a.keys.Right):
 		if a.activePanel == PanelTree {
 			a.tree.Expand()
+			a.updateLayout()
 		} else {
 			a.treemap.MoveToBlock(1, 0)
 			a.syncSelectionFromTreemap()
@@ -267,8 +318,10 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a.activePanel == PanelTreemap {
 			a.treemap.ZoomIn()
 		} else {
-			// Expand in tree view
-			a.tree.Expand()
+			// Toggle expand/collapse in tree view
+			a.tree.Toggle()
+			a.syncSelection()
+			a.updateLayout()
 		}
 		return a, nil
 
@@ -278,6 +331,7 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			// Collapse in tree view
 			a.tree.Collapse()
+			a.updateLayout()
 		}
 		return a, nil
 
@@ -298,26 +352,6 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return a, nil
-
-	// Drive selection
-	case key.Matches(msg, a.keys.Drive1):
-		return a, a.selectDrive(0)
-	case key.Matches(msg, a.keys.Drive2):
-		return a, a.selectDrive(1)
-	case key.Matches(msg, a.keys.Drive3):
-		return a, a.selectDrive(2)
-	case key.Matches(msg, a.keys.Drive4):
-		return a, a.selectDrive(3)
-	case key.Matches(msg, a.keys.Drive5):
-		return a, a.selectDrive(4)
-	case key.Matches(msg, a.keys.Drive6):
-		return a, a.selectDrive(5)
-	case key.Matches(msg, a.keys.Drive7):
-		return a, a.selectDrive(6)
-	case key.Matches(msg, a.keys.Drive8):
-		return a, a.selectDrive(7)
-	case key.Matches(msg, a.keys.Drive9):
-		return a, a.selectDrive(8)
 	}
 
 	return a, nil
@@ -331,7 +365,7 @@ func (a *App) selectDrive(idx int) tea.Cmd {
 
 	a.header.SetSelected(idx)
 	a.scanning = true
-	a.header.SetScanning(true, "Starting...")
+	a.header.SetScanning(true, "")
 	a.root = nil
 	a.prevRoot = nil
 	a.tree.SetRoot(nil)
@@ -347,6 +381,10 @@ func (a *App) selectDrive(idx int) tea.Cmd {
 func (a *App) syncSelection() {
 	if node := a.tree.Selected(); node != nil {
 		a.treemap.SetSelected(node)
+		// If a directory is selected, focus treemap on it to show its contents
+		if node.IsDir && len(node.Children) > 0 {
+			a.treemap.SetFocus(node)
+		}
 	}
 }
 
@@ -370,22 +408,30 @@ func (a *App) updateLayout() {
 		panelHeight = 1
 	}
 
-	// Split width between tree and treemap (50/50)
-	halfWidth := a.width / 2
-	if halfWidth < 10 {
-		halfWidth = 10
+	// Tree panel takes only what it needs, max 50% of screen
+	treeWidth := a.tree.RequiredWidth()
+	maxTreeWidth := a.width / 2
+	if treeWidth > maxTreeWidth {
+		treeWidth = maxTreeWidth
+	}
+	if treeWidth < 20 {
+		treeWidth = 20
 	}
 
 	// Update component sizes
 	a.header.SetWidth(a.width)
-	a.tree.SetSize(halfWidth, panelHeight)
-	a.treemap.SetSize(a.width-halfWidth, panelHeight)
+	a.tree.SetSize(treeWidth, panelHeight)
+	a.treemap.SetSize(a.width-treeWidth, panelHeight)
 	a.help.SetSize(a.width, a.height)
+	a.driveSelector.SetSize(a.width, a.height)
 }
 
 // View implements tea.Model
 func (a App) View() string {
 	if a.width == 0 || a.height == 0 {
+		if a.scanning {
+			return "Scanning drive..."
+		}
 		return "Loading..."
 	}
 
@@ -402,11 +448,48 @@ func (a App) View() string {
 		sections = append(sections, errStyle.Render(fmt.Sprintf("Error: %v", a.err)))
 	}
 
-	// Panels side by side
-	treeView := a.tree.View()
-	treemapView := a.treemap.View()
-	panels := lipgloss.JoinHorizontal(lipgloss.Top, treeView, treemapView)
-	sections = append(sections, panels)
+	// Show scanning panel in center if scanning OR if no data loaded yet
+	if a.scanning || a.root == nil {
+		// Use same panel height as tree/treemap panels
+		panelHeight := a.height - 4 // header + help bar + margins
+		if panelHeight < 1 {
+			panelHeight = 1
+		}
+
+		var statusText string
+		if a.scanning {
+			progress := a.header.ScanProgress()
+			if progress != "" {
+				statusText = progress
+			} else {
+				statusText = "Analyzing..."
+			}
+		} else {
+			statusText = "Loading..."
+		}
+
+		// Create the status text box
+		scanningBox := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorPrimary).
+			Padding(1, 3).
+			Render(statusText)
+
+		// Center the box within a full-size panel
+		centered := lipgloss.Place(
+			a.width, panelHeight,
+			lipgloss.Center, lipgloss.Center,
+			scanningBox,
+		)
+
+		sections = append(sections, centered)
+	} else {
+		// Panels side by side
+		treeView := a.tree.View()
+		treemapView := a.treemap.View()
+		panels := lipgloss.JoinHorizontal(lipgloss.Top, treeView, treemapView)
+		sections = append(sections, panels)
+	}
 
 	// Help bar at bottom
 	sections = append(sections, HelpBar(a.width))
@@ -414,10 +497,21 @@ func (a App) View() string {
 	// Join all sections vertically
 	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
 
-	// Help overlay on top if visible
+	// Help overlay on top if visible (highest priority)
 	if a.help.IsVisible() {
 		overlay := a.help.View()
-		// Position overlay over the content
+		return lipgloss.Place(
+			a.width, a.height,
+			lipgloss.Center, lipgloss.Center,
+			overlay,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("#1F1F23")),
+		)
+	}
+
+	// Drive selector overlay
+	if a.driveSelector.IsVisible() {
+		overlay := a.driveSelector.View()
 		return lipgloss.Place(
 			a.width, a.height,
 			lipgloss.Center, lipgloss.Center,

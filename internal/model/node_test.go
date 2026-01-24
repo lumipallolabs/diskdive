@@ -11,6 +11,9 @@ func TestNodeSize(t *testing.T) {
 		Children: []*Node{child1, child2},
 	}
 
+	// Must call ComputeSizes to cache totals
+	parent.ComputeSizes()
+
 	if parent.TotalSize() != 300 {
 		t.Errorf("expected 300, got %d", parent.TotalSize())
 	}

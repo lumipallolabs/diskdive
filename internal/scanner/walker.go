@@ -60,6 +60,9 @@ func (w *Walker) Scan(ctx context.Context, root string) (*model.Node, error) {
 	// Build tree recursively with parallelism
 	w.scanDir(ctx, rootNode)
 
+	// Cache computed sizes for fast access
+	rootNode.ComputeSizes()
+
 	close(w.progressCh)
 	return rootNode, nil
 }

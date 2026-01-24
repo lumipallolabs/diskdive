@@ -1,9 +1,13 @@
 package ui
 
 import (
+	"fmt"
+	"math"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jeffwilliams/squarify"
 	"github.com/samuli/diskdive/internal/model"
 )
 
@@ -12,6 +16,10 @@ type Block struct {
 	Node          *model.Node
 	X, Y          int
 	Width, Height int
+	// For grouped items (when Node is nil)
+	IsGrouped   bool
+	GroupCount  int
+	GroupSize   int64
 }
 
 // TreemapPanel displays a treemap visualization
@@ -54,6 +62,15 @@ func (t *TreemapPanel) SetFocused(focused bool) {
 // SetShowDiff enables/disables diff display
 func (t *TreemapPanel) SetShowDiff(show bool) {
 	t.showDiff = show
+}
+
+// SetFocus sets the focus node (what to display in treemap)
+func (t *TreemapPanel) SetFocus(node *model.Node) {
+	if node == nil {
+		return
+	}
+	t.focus = node
+	t.layout()
 }
 
 // SetSelected sets the selected node (for sync from tree)
@@ -161,7 +178,45 @@ func (t *TreemapPanel) MoveToBlock(dx, dy int) {
 	}
 }
 
-// layout calculates block positions using slice-and-dice algorithm
+// treemapItem wraps a node for the squarify algorithm
+type treemapItem struct {
+	node *model.Node
+	size float64
+	// For grouped items
+	isGrouped  bool
+	groupCount int
+	groupSize  int64
+	// Children for TreeSizer interface
+	children []*treemapItem
+}
+
+// Size implements squarify.TreeSizer
+func (t *treemapItem) Size() float64 {
+	return t.size
+}
+
+// NumChildren implements squarify.TreeSizer
+func (t *treemapItem) NumChildren() int {
+	return len(t.children)
+}
+
+// Child implements squarify.TreeSizer
+func (t *treemapItem) Child(i int) squarify.TreeSizer {
+	return t.children[i]
+}
+
+const (
+	minBlockWidth   = 8  // minimum width for any block (fits short label)
+	minBlockHeight  = 3  // minimum height for any block (border + 1 line text)
+	maxVisibleItems = 15 // max items before grouping remainder into "N more"
+
+	// Layout constants for treemap panel (no left border - shares with tree panel)
+	treemapBorderH = 1 // right border only (left shared with tree)
+	treemapPadding = 2 // 1 char padding on each side
+	treemapBorderV = 2 // top + bottom border
+)
+
+// layout calculates block positions using the squarify library
 func (t *TreemapPanel) layout() {
 	t.blocks = nil
 
@@ -181,8 +236,8 @@ func (t *TreemapPanel) layout() {
 	}
 
 	// Available space (accounting for border and padding)
-	contentW := t.width - 4
-	contentH := t.height - 2
+	contentW := t.width - treemapBorderH - treemapPadding
+	contentH := t.height - treemapBorderV
 
 	if contentW < 1 {
 		contentW = 1
@@ -191,116 +246,233 @@ func (t *TreemapPanel) layout() {
 		contentH = 1
 	}
 
-	t.sliceDice(nodes, 0, 0, contentW, contentH, true)
-}
-
-// sliceDice recursively divides space using slice-and-dice algorithm
-func (t *TreemapPanel) sliceDice(nodes []*model.Node, x, y, w, h int, horizontal bool) {
-	if len(nodes) == 0 || w < 1 || h < 1 {
-		return
-	}
-
-	// Calculate total size
-	var totalSize int64
+	// Prepare items with their REAL sizes - no modifications
+	items := make([]*treemapItem, 0, len(nodes))
 	for _, n := range nodes {
-		totalSize += n.TotalSize()
+		size := float64(n.TotalSize())
+		if size < 1 {
+			size = 1 // Prevent division by zero, but keep proportions
+		}
+		items = append(items, &treemapItem{node: n, size: size})
 	}
 
-	if totalSize == 0 {
-		// Equal division if all sizes are 0
-		totalSize = int64(len(nodes))
-		for i, n := range nodes {
-			if horizontal {
-				nodeW := w / len(nodes)
-				nodeX := x + i*nodeW
-				if i == len(nodes)-1 {
-					nodeW = w - i*nodeW // Last one gets remainder
-				}
-				t.blocks = append(t.blocks, Block{
-					Node:   n,
-					X:      nodeX,
-					Y:      y,
-					Width:  nodeW,
-					Height: h,
-				})
-			} else {
-				nodeH := h / len(nodes)
-				nodeY := y + i*nodeH
-				if i == len(nodes)-1 {
-					nodeH = h - i*nodeH
-				}
-				t.blocks = append(t.blocks, Block{
-					Node:   n,
-					X:      x,
-					Y:      nodeY,
-					Width:  w,
-					Height: nodeH,
-				})
+	// Sort by size descending
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].size > items[j].size
+	})
+
+	rect := squarify.Rect{
+		X: 0,
+		Y: 0,
+		W: float64(contentW),
+		H: float64(contentH),
+	}
+
+	var blocks []squarify.Block
+	var metas []squarify.Meta
+	var displayItems []*treemapItem
+	var root *treemapItem
+
+	// Try to fit as many items as possible
+	maxVisible := len(items)
+	if maxVisible > maxVisibleItems {
+		maxVisible = 15
+	}
+
+	// Find the maximum items that fit with minimum dimensions
+	for maxVisible >= 2 {
+		// Calculate rect for main items (reserve bottom strip for "N more" if grouping)
+		mainRect := rect
+		// Only group if there would be 2+ items to group (don't show "1 more")
+		// Calculate how many items would be grouped with current maxVisible
+		numVisible := maxVisible
+		if numVisible > len(items) {
+			numVisible = len(items)
+		}
+		remainingItems := len(items) - numVisible
+
+		// If only 1 item would be grouped, try to show it instead
+		// by not reserving space for the grouped block
+		hasGroupedItems := remainingItems >= 2
+		if hasGroupedItems {
+			// Reserve bottom strip for "N more" block
+			mainRect.H = float64(contentH - minBlockHeight)
+			// We'll show maxVisible-1 items + grouped block
+			numVisible = maxVisible - 1
+			if numVisible > len(items) {
+				numVisible = len(items)
 			}
 		}
-		return
-	}
 
-	// Single node - create block
-	if len(nodes) == 1 {
-		t.blocks = append(t.blocks, Block{
-			Node:   nodes[0],
-			X:      x,
-			Y:      y,
-			Width:  w,
-			Height: h,
+		displayItems = make([]*treemapItem, 0, numVisible)
+		for i := 0; i < numVisible; i++ {
+			displayItems = append(displayItems, items[i])
+		}
+
+		// Create root for squarify (main items only)
+		root = &treemapItem{
+			size:     0,
+			children: displayItems,
+		}
+		for _, child := range displayItems {
+			root.size += child.size
+		}
+
+		// Run squarify on main items
+		blocks, metas = squarify.Squarify(root, mainRect, squarify.Options{
+			MaxDepth: 1,
+			Sort:     true,
 		})
-		return
+
+		// Check if all main blocks meet minimum dimensions
+		allFit := true
+		for i, block := range blocks {
+			if i >= len(metas) || metas[i].Depth != 0 {
+				continue
+			}
+			w := int(math.Floor(block.X+block.W)) - int(math.Floor(block.X))
+			h := int(math.Floor(block.Y+block.H)) - int(math.Floor(block.Y))
+			if w < minBlockWidth || h < minBlockHeight {
+				allFit = false
+				break
+			}
+		}
+
+		if allFit {
+			// Add the grouped items block at the bottom if needed
+			// Only group if there are 2+ items to group (don't show "1 more")
+			remainingItems := len(items) - numVisible
+			if hasGroupedItems && remainingItems >= 2 {
+				var groupSize int64
+				for i := numVisible; i < len(items); i++ {
+					groupSize += int64(items[i].size)
+				}
+				// Manually add the "N more" block at the bottom
+				t.blocks = append(t.blocks, Block{
+					X:          0,
+					Y:          contentH - minBlockHeight,
+					Width:      contentW,
+					Height:     minBlockHeight,
+					IsGrouped:  true,
+					GroupCount: remainingItems,
+					GroupSize:  groupSize,
+				})
+			}
+			break // Found a working configuration
+		}
+		maxVisible--
 	}
 
-	// Slice and dice
-	offset := 0
-	for i, n := range nodes {
-		ratio := float64(n.TotalSize()) / float64(totalSize)
+	// Handle edge case: only 1 item fits
+	if maxVisible < 2 && len(items) > 0 {
+		// Show the largest item, with "N more" only if 2+ items would be grouped
+		displayItems = items[:1]
+		root = &treemapItem{
+			size:     items[0].size,
+			children: displayItems,
+		}
+		mainRect := rect
 
-		if horizontal {
-			nodeW := int(float64(w) * ratio)
-			if nodeW < 1 {
-				nodeW = 1
+		// Only reserve space for grouped block if 2+ items to group
+		needsGrouped := len(items) > 2 // 1 shown + 2+ grouped
+		if needsGrouped {
+			mainRect.H = float64(contentH - minBlockHeight)
+		}
+
+		blocks, metas = squarify.Squarify(root, mainRect, squarify.Options{
+			MaxDepth: 1,
+			Sort:     true,
+		})
+
+		// Add grouped block only if 2+ items
+		if needsGrouped {
+			var groupSize int64
+			for i := 1; i < len(items); i++ {
+				groupSize += int64(items[i].size)
 			}
-			// Last node gets the remainder
-			if i == len(nodes)-1 {
-				nodeW = w - offset
+			t.blocks = append(t.blocks, Block{
+				X:          0,
+				Y:          contentH - minBlockHeight,
+				Width:      contentW,
+				Height:     minBlockHeight,
+				IsGrouped:  true,
+				GroupCount: len(items) - 1,
+				GroupSize:  groupSize,
+			})
+		}
+	}
+
+	// Convert squarify blocks to our Block type
+	// Track where main blocks actually end (for placing "N more" without gaps)
+	maxMainBlockEndY := 0
+
+	for i, block := range blocks {
+		item, ok := block.TreeSizer.(*treemapItem)
+		if !ok {
+			continue
+		}
+
+		// Only process leaf nodes at depth 0 (immediate children of root)
+		// The root itself is not returned by squarify, only its children
+		// depth 0 = children we want to display
+		if i >= len(metas) || metas[i].Depth != 0 {
+			continue
+		}
+
+		// Convert float to int using floor for start, round for end Y (to prevent vertical gaps)
+		x := int(math.Floor(block.X))
+		y := int(math.Floor(block.Y))
+		endX := int(math.Floor(block.X + block.W))
+		endY := int(math.Round(block.Y + block.H))
+		w := endX - x
+		h := endY - y
+
+		// Clip to content bounds
+		if x < 0 {
+			x = 0
+		}
+		if y < 0 {
+			y = 0
+		}
+		if endX > contentW {
+			w = contentW - x
+		}
+		if endY > contentH {
+			h = contentH - y
+		}
+
+		// Skip blocks that are too small or outside bounds
+		if w < 1 || h < 1 || x >= contentW || y >= contentH {
+			continue
+		}
+
+		// Track where main blocks end
+		if y+h > maxMainBlockEndY {
+			maxMainBlockEndY = y + h
+		}
+
+		t.blocks = append(t.blocks, Block{
+			Node:       item.node,
+			X:          x,
+			Y:          y,
+			Width:      w,
+			Height:     h,
+			IsGrouped:  item.isGrouped,
+			GroupCount: item.groupCount,
+			GroupSize:  item.groupSize,
+		})
+	}
+
+	// Adjust "N more" block position to start right after main blocks (no gap)
+	// and extend to fill remaining space
+	for i := range t.blocks {
+		if t.blocks[i].IsGrouped {
+			t.blocks[i].Y = maxMainBlockEndY
+			t.blocks[i].Height = contentH - maxMainBlockEndY
+			if t.blocks[i].Height < 1 {
+				t.blocks[i].Height = 1
 			}
-			if offset+nodeW > w {
-				nodeW = w - offset
-			}
-			if nodeW > 0 {
-				t.blocks = append(t.blocks, Block{
-					Node:   n,
-					X:      x + offset,
-					Y:      y,
-					Width:  nodeW,
-					Height: h,
-				})
-				offset += nodeW
-			}
-		} else {
-			nodeH := int(float64(h) * ratio)
-			if nodeH < 1 {
-				nodeH = 1
-			}
-			if i == len(nodes)-1 {
-				nodeH = h - offset
-			}
-			if offset+nodeH > h {
-				nodeH = h - offset
-			}
-			if nodeH > 0 {
-				t.blocks = append(t.blocks, Block{
-					Node:   n,
-					X:      x,
-					Y:      y + offset,
-					Width:  w,
-					Height: nodeH,
-				})
-				offset += nodeH
-			}
+			break
 		}
 	}
 }
@@ -308,13 +480,12 @@ func (t *TreemapPanel) sliceDice(nodes []*model.Node, x, y, w, h int, horizontal
 // View renders the treemap
 func (t TreemapPanel) View() string {
 	if t.focus == nil {
-		return TreemapPanelStyle.Width(t.width).Height(t.height).Render("No data")
+		return TreemapPanelStyle.Render("No data")
 	}
 
-	// Calculate content area
-	contentW := t.width - 4
-	contentH := t.height - 2
-
+	// Content dimensions (accounting for border and padding)
+	contentW := t.width - treemapBorderH - treemapPadding
+	contentH := t.height - treemapBorderV
 	if contentW < 1 {
 		contentW = 1
 	}
@@ -334,8 +505,15 @@ func (t TreemapPanel) View() string {
 		}
 	}
 
-	// Draw blocks
+	// Draw blocks (with bounds validation)
 	for _, block := range t.blocks {
+		// Ensure block is within bounds (defensive)
+		if block.X < 0 || block.Y < 0 ||
+			block.X+block.Width > contentW ||
+			block.Y+block.Height > contentH {
+			// Skip invalid blocks
+			continue
+		}
 		t.drawBlock(grid, colors, block, contentW, contentH)
 	}
 
@@ -351,7 +529,13 @@ func (t TreemapPanel) View() string {
 
 	content := strings.Join(lines, "\n")
 
-	style := TreemapPanelStyle.Width(t.width).Height(t.height)
+	// Apply border - no left border (shares with tree panel)
+	// Set Height to match tree panel (which uses Height(t.height))
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorBorder).
+		BorderLeft(false).
+		Height(t.height)
 	if t.focused {
 		style = style.BorderForeground(ColorPrimary)
 	}
@@ -369,7 +553,11 @@ func (t TreemapPanel) drawBlock(grid [][]rune, colors [][]lipgloss.Style, block 
 	var bgColor lipgloss.Color
 	var fgColor lipgloss.Color
 
-	if t.showDiff && block.Node != nil {
+	if block.IsGrouped {
+		// Grouped items get a distinct color
+		bgColor = lipgloss.Color("#3D3D3D")
+		fgColor = lipgloss.Color("#9CA3AF")
+	} else if t.showDiff && block.Node != nil {
 		if block.Node.IsNew {
 			bgColor = ColorNew
 			fgColor = lipgloss.Color("#000000")
@@ -465,40 +653,46 @@ func (t TreemapPanel) drawBlock(grid [][]rune, colors [][]lipgloss.Style, block 
 	}
 
 	// Draw label if space permits
-	if block.Node != nil && block.Width > 4 && block.Height > 2 {
-		label := block.Node.Name
-		maxLen := block.Width - 4
-		if maxLen > 0 && len(label) > maxLen {
-			label = label[:maxLen]
+	if block.Width > 4 && block.Height > 2 {
+		var label string
+		var sizeStr string
+
+		if block.IsGrouped {
+			label = fmt.Sprintf("%d more", block.GroupCount)
+			sizeStr = FormatSize(block.GroupSize)
+		} else if block.Node != nil {
+			label = block.Node.Name
+			sizeStr = FormatSize(block.Node.TotalSize())
 		}
 
-		labelY := block.Y + 1
-		labelX := block.X + 2
+		innerW := block.Width - 4
+		innerH := block.Height - 2
+		if innerW < 1 || innerH < 1 {
+			return
+		}
 
-		if labelY < gridH && labelX < gridW && maxLen > 0 {
-			labelStyle := blockStyle
-			for i, ch := range label {
-				x := labelX + i
-				if x < gridW && x < block.X+block.Width-2 {
-					grid[labelY][x] = ch
-					colors[labelY][x] = labelStyle
-				}
+		// Use lipgloss to wrap text (don't set Height - let text be natural size)
+		text := label
+		if innerH > 1 && sizeStr != "" {
+			text = label + "\n" + sizeStr
+		}
+
+		wrapped := lipgloss.NewStyle().Width(innerW).Render(text)
+
+		// Draw wrapped text into grid
+		lines := strings.Split(wrapped, "\n")
+		for dy, line := range lines {
+			if dy >= innerH {
+				break
 			}
-		}
-
-		// Show size on next line if space
-		if block.Height > 3 && block.Width > 6 {
-			sizeStr := FormatSize(block.Node.TotalSize())
-			sizeY := block.Y + 2
-			sizeX := block.X + 2
-
-			if sizeY < gridH {
-				for i, ch := range sizeStr {
-					x := sizeX + i
-					if x < gridW && x < block.X+block.Width-2 {
-						grid[sizeY][x] = ch
-						colors[sizeY][x] = blockStyle
-					}
+			for dx, ch := range line {
+				if dx >= innerW {
+					break
+				}
+				x, y := block.X+2+dx, block.Y+1+dy
+				if x < gridW && y < gridH {
+					grid[y][x] = ch
+					colors[y][x] = blockStyle
 				}
 			}
 		}

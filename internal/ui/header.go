@@ -9,6 +9,8 @@ import (
 	"github.com/samuli/diskdive/internal/model"
 )
 
+const headerProgressBarWidth = 20 // Width of disk usage progress bar
+
 // Header displays drive tabs and stats
 type Header struct {
 	drives       []model.Drive
@@ -52,6 +54,11 @@ func (h *Header) SetScanning(scanning bool, progress string) {
 	h.scanProgress = progress
 }
 
+// ScanProgress returns the current scan progress text
+func (h Header) ScanProgress() string {
+	return h.scanProgress
+}
+
 // SetWidth sets the header width
 func (h *Header) SetWidth(w int) {
 	h.width = w
@@ -76,32 +83,34 @@ func (h Header) View() string {
 	}
 	driveTabs := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 
-	// Stats
+	// Stats (only show when not scanning - scanning status shown in center panel)
 	var stats string
-	if h.scanning {
-		stats = StatsStyle.Render(fmt.Sprintf("Scanning... %s", h.scanProgress))
-	} else if drive := h.Selected(); drive != nil {
-		usedPct := drive.UsedPercent()
-		barWidth := 20
-		filled := int(usedPct / 100 * float64(barWidth))
-		bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+	if !h.scanning {
+		if drive := h.Selected(); drive != nil {
+			usedPct := drive.UsedPercent()
+			barWidth := headerProgressBarWidth
+			filled := int(usedPct / 100 * float64(barWidth))
+			bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
 
-		stats = StatsStyle.Render(fmt.Sprintf(
-			"Used: %s / %s  [%s] %.0f%%",
-			FormatSize(drive.UsedBytes()),
-			FormatSize(drive.TotalBytes),
-			bar,
-			usedPct,
-		))
+			stats = StatsStyle.Render(fmt.Sprintf(
+				"Used: %s / %s  [%s] %.0f%%",
+				FormatSize(drive.UsedBytes()),
+				FormatSize(drive.TotalBytes),
+				bar,
+				usedPct,
+			))
+		}
 	}
 
 	// Layout: tabs on left, stats on right
-	gap := h.width - lipgloss.Width(driveTabs) - lipgloss.Width(stats)
-	if gap < 0 {
+	tabsWidth := lipgloss.Width(driveTabs)
+	statsWidth := lipgloss.Width(stats)
+	gap := h.width - tabsWidth - statsWidth - 2 // -2 for HeaderStyle padding
+	if gap < 1 {
 		gap = 1
 	}
 
-	return HeaderStyle.Width(h.width).Render(
-		driveTabs + strings.Repeat(" ", gap) + stats,
-	)
+	line := driveTabs + strings.Repeat(" ", gap) + stats
+
+	return HeaderStyle.Render(line)
 }
