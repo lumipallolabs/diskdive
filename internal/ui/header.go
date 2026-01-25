@@ -11,7 +11,7 @@ import (
 
 const headerProgressBarWidth = 20 // Width of disk usage progress bar
 
-// Header displays drive tabs and stats
+// Header displays drive info and stats (2 lines)
 type Header struct {
 	drives       []model.Drive
 	selected     int
@@ -20,13 +20,15 @@ type Header struct {
 	scanProgress string
 	freedSession int64
 	freedTotal   int64
+	version      string
 }
 
 // NewHeader creates a new header component
-func NewHeader(drives []model.Drive) Header {
+func NewHeader(drives []model.Drive, version string) Header {
 	return Header{
 		drives:   drives,
 		selected: 0,
+		version:  version,
 	}
 }
 
@@ -77,115 +79,103 @@ func (h Header) Update(msg tea.Msg) (Header, tea.Cmd) {
 	return h, nil
 }
 
-// View renders the header
+// View renders the header (2 lines + separator)
+// Line 1: DISKDIVE 0.1.4                     Used: X / Y [bar] XX%
+// Line 2: Drive: Name [space]               Freed: X session | Y total
+// Line 3: ─────────────────────────────────────────────────────────
 func (h Header) View() string {
-	// App name with style
-	appName := lipgloss.NewStyle().
+	// Styles
+	nameStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#C084FC")). // soft violet
-		Bold(true).
-		Render("DISKDIVE")
+		Bold(true)
+	versionStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#9CA3AF")) // lighter dim gray
+	dimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#9CA3AF")) // lighter dim gray
+	labelStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#9CA3AF")) // lighter dim for labels
+	barFilledStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#C084FC")) // violet for filled
+	barEmptyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6B7280")) // lighter gray for empty
 
-	// Drive tabs
-	var tabs []string
-	for i, d := range h.drives {
-		label := fmt.Sprintf("%s:", d.Letter)
-		if i == h.selected {
-			tabs = append(tabs, DriveTabActive.Render(label))
+	// === LINE 1: App name (left) | Used stats (right) ===
+	appName := nameStyle.Render("DISKDIVE") + versionStyle.Render(" "+h.version)
+
+	var usedStats string
+	if drive := h.Selected(); drive != nil {
+		usedPct := drive.UsedPercent()
+		barWidth := headerProgressBarWidth
+
+		// Check if we have room for full bar
+		usedLabel := labelStyle.Render("Used: ")
+		usedValue := StatsStyle.Render(fmt.Sprintf("%s / %s", FormatSize(drive.UsedBytes()), FormatSize(drive.TotalBytes)))
+		appWidth := lipgloss.Width(appName)
+		fullStatsWidth := 6 + 20 + 4 + barWidth + 5 // "Used: " + sizes + "  " + bar + " XX%"
+
+		if h.width < appWidth+fullStatsWidth+4 {
+			// Narrow: no bar
+			usedStats = usedLabel + usedValue + StatsStyle.Render(fmt.Sprintf("  %.0f%%", usedPct))
 		} else {
-			tabs = append(tabs, DriveTabInactive.Render(label))
+			// Full with thicker bar
+			filled := int(usedPct / 100 * float64(barWidth))
+			if filled > barWidth {
+				filled = barWidth
+			}
+			bar := barFilledStyle.Render(strings.Repeat("▓", filled)) + barEmptyStyle.Render(strings.Repeat("░", barWidth-filled))
+			usedStats = usedLabel + usedValue + StatsStyle.Render("  ") + bar + StatsStyle.Render(fmt.Sprintf(" %.0f%%", usedPct))
 		}
 	}
-	driveTabs := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 
-	// Freed stats (show in middle when either counter > 0)
+	// Build line 1
+	line1Left := appName
+	line1Right := usedStats
+	gap1 := h.width - lipgloss.Width(line1Left) - lipgloss.Width(line1Right)
+	if gap1 < 2 {
+		gap1 = 2
+	}
+	line1 := line1Left + strings.Repeat(" ", gap1) + line1Right
+
+	// === LINE 2: Drive info (left) | Freed stats (right) ===
 	var freedStats string
 	if h.freedSession > 0 || h.freedTotal > 0 {
-		freedLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Render("Freed: ")
-		freedSessionStr := lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399")).Render(FormatSize(h.freedSession) + " session")
-		freedSep := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Render(" | ")
-		freedTotalStr := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Render(FormatSize(h.freedTotal) + " total")
-		freedStats = freedLabel + freedSessionStr + freedSep + freedTotalStr
+		freedLabel := labelStyle.Render("Freed: ")
+		freedSession := lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399")).Render(FormatSize(h.freedSession) + " session")
+		freedSep := dimStyle.Render(" | ")
+		freedTotal := dimStyle.Render(FormatSize(h.freedTotal) + " total")
+		freedStats = freedLabel + freedSession + freedSep + freedTotal
 	}
 
-	// Stats (only show when not scanning - scanning status shown in center panel)
-	var stats, statsCompact string
-	if !h.scanning {
-		if drive := h.Selected(); drive != nil {
-			usedPct := drive.UsedPercent()
-			barWidth := headerProgressBarWidth
-			filled := int(usedPct / 100 * float64(barWidth))
-			bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+	var driveName string
+	if drive := h.Selected(); drive != nil {
+		driveLabel := labelStyle.Render("Drive: ")
+		driveNameStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Bold(true)
+		driveValue := driveNameStyle.Render(drive.Letter)
+		driveName = driveLabel + driveValue
 
-			stats = StatsStyle.Render(fmt.Sprintf(
-				"Used: %s / %s  [%s] %.0f%%",
-				FormatSize(drive.UsedBytes()),
-				FormatSize(drive.TotalBytes),
-				bar,
-				usedPct,
-			))
-			statsCompact = StatsStyle.Render(fmt.Sprintf(
-				"Used: %s / %s",
-				FormatSize(drive.UsedBytes()),
-				FormatSize(drive.TotalBytes),
-			))
+		// Add "space change" hint only if there's room
+		hint := dimStyle.Render("  ") + KeyHint.Render("space") + dimStyle.Render(" change")
+		hintWidth := lipgloss.Width(hint)
+		availableForHint := h.width - lipgloss.Width(driveName) - lipgloss.Width(freedStats) - 4 // 4 = min gap
+		if availableForHint >= hintWidth {
+			driveName = driveName + hint
 		}
 	}
 
-	// Layout: app name, tabs on left, freed in middle, disk usage on right
-	appNameWidth := lipgloss.Width(appName)
-	tabsWidth := lipgloss.Width(driveTabs)
-	freedWidth := lipgloss.Width(freedStats)
-	statsWidth := lipgloss.Width(stats)
-
-	sep := lipgloss.NewStyle().Foreground(ColorBorder).Render(" │ ")
-	sepWidth := lipgloss.Width(sep)
-
-	// Calculate total content width
-	totalContent := appNameWidth + sepWidth + tabsWidth + freedWidth + statsWidth + 4 // +4 for min gaps
-
-	// For narrow terminals, progressively hide elements
-	if h.width < totalContent {
-		// First: switch to compact stats (no progress bar)
-		if statsWidth > 0 && statsCompact != "" {
-			stats = statsCompact
-			statsWidth = lipgloss.Width(stats)
-			totalContent = appNameWidth + sepWidth + tabsWidth + freedWidth + statsWidth + 4
-		}
+	// Build line 2
+	line2Left := driveName
+	line2Right := freedStats
+	gap2 := h.width - lipgloss.Width(line2Left) - lipgloss.Width(line2Right)
+	if gap2 < 2 {
+		gap2 = 2
 	}
-	if h.width < totalContent {
-		// Then drop freed stats
-		if freedWidth > 0 {
-			freedStats = ""
-			freedWidth = 0
-			totalContent = appNameWidth + sepWidth + tabsWidth + statsWidth + 2
-		}
-	}
-	if h.width < totalContent {
-		// Finally drop stats entirely
-		if statsWidth > 0 {
-			stats = ""
-			statsWidth = 0
-			totalContent = appNameWidth + sepWidth + tabsWidth
-		}
-	}
+	line2 := line2Left + strings.Repeat(" ", gap2) + line2Right
 
-	// Calculate gaps to distribute remaining space
-	remainingSpace := h.width - totalContent
-	if remainingSpace < 2 {
-		remainingSpace = 2
-	}
+	// === LINE 3: Separator ===
+	sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#3F3F46"))
+	separator := sepStyle.Render(strings.Repeat("─", h.width))
 
-	// Split remaining space: more on left side of freed stats to push it toward center
-	leftGap := remainingSpace / 2
-	rightGap := remainingSpace - leftGap
-	if leftGap < 1 {
-		leftGap = 1
-	}
-	if rightGap < 1 {
-		rightGap = 1
-	}
-
-	line := appName + sep + driveTabs + strings.Repeat(" ", leftGap) + freedStats + strings.Repeat(" ", rightGap) + stats
-
-	return HeaderStyle.MaxHeight(1).Render(line)
+	return lipgloss.JoinVertical(lipgloss.Left, line1, line2, separator)
 }

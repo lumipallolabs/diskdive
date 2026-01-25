@@ -59,7 +59,7 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("G", "bottom"),
 		),
 		Tab: key.NewBinding(
-			key.WithKeys("tab"),
+			key.WithKeys("tab", "shift+tab"),
 			key.WithHelp("tab", "switch panel"),
 		),
 		Enter: key.NewBinding(

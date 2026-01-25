@@ -134,8 +134,7 @@ func formatColorLine(color lipgloss.Color, desc string, newline bool) string {
 
 // HelpBar renders a bottom help bar with key hints
 func HelpBar(width int) string {
-	keyStyle := HelpKey
-	sepStyle := HelpStyle
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF")) // lighter dim description
 
 	// Full hints for wide terminals, abbreviated for narrow
 	type hint struct {
@@ -144,7 +143,7 @@ func HelpBar(width int) string {
 	}
 
 	fullHints := []hint{
-		{"↑↓←→/hjkl", "navigate"},
+		{"↑↓←→", "navigate"},
 		{"Enter", "zoom in"},
 		{"Esc", "back"},
 		{"Tab", "panel"},
@@ -181,15 +180,15 @@ func HelpBar(width int) string {
 
 	var parts []string
 	for _, h := range hints {
-		parts = append(parts, keyStyle.Render(h.key)+sepStyle.Render(" "+h.desc))
+		parts = append(parts, HelpKey.Render(h.key)+" "+descStyle.Render(h.desc))
 	}
 
-	separator := "  |  "
+	separator := "   "
 	if width < 80 {
-		separator = " | "
+		separator = "  "
 	}
 
-	bar := strings.Join(parts, sepStyle.Render(separator))
+	bar := strings.Join(parts, separator)
 
 	return HelpStyle.Width(width).MaxHeight(1).Render(bar)
 }

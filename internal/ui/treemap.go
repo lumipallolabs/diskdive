@@ -76,11 +76,17 @@ func (t *TreemapPanel) SetShowDiff(show bool) {
 }
 
 // SetFocus sets the focus node (what to display in treemap)
+// If a file is selected, shows its parent directory contents instead
 func (t *TreemapPanel) SetFocus(node *model.Node) {
 	if node == nil {
 		return
 	}
-	t.focus = node
+	// Files: show parent directory so file appears among siblings
+	if !node.IsDir && node.Parent != nil {
+		t.focus = node.Parent
+	} else {
+		t.focus = node
+	}
 	t.layout()
 }
 
@@ -588,7 +594,7 @@ func (t *TreemapPanel) View() string {
 	}
 
 	content := strings.Join(outputLines, "\n")
-	style := lipgloss.NewStyle().Height(t.height)
+	style := lipgloss.NewStyle().Height(t.height).MaxHeight(t.height)
 
 	// Cache the result
 	t.cachedView = style.Render(content)
@@ -603,35 +609,37 @@ func (t *TreemapPanel) View() string {
 
 // renderBlock renders a complete block using lipgloss and returns the styled string
 func (t TreemapPanel) renderBlock(block Block) string {
-	// Determine colors
-	var bgColor, fgColor, borderColor lipgloss.Color
+	// Determine colors - border color indicates type, no background fill
+	var fgColor, borderColor lipgloss.Color
 
 	if block.IsGrouped {
-		bgColor = lipgloss.Color("#3D3D3D")
-		fgColor = lipgloss.Color("#9CA3AF")
+		fgColor = lipgloss.Color("#6B7280")
 		borderColor = lipgloss.Color("#4B5563")
 	} else if t.showDiff && block.Node != nil && block.Node.IsDeleted {
 		// Deleted items shown in muted gray
-		bgColor = lipgloss.Color("#1A1A1A")
 		fgColor = lipgloss.Color("#6B7280")
 		borderColor = lipgloss.Color("#374151")
 	} else {
 		if block.Node != nil && block.Node.IsDir {
-			bgColor = lipgloss.Color("#1E3A5F")
+			// Directories: cyan border and text
 			fgColor = ColorDir
-			borderColor = lipgloss.Color("#4B5563")
+			borderColor = ColorDir
 		} else {
-			bgColor = lipgloss.Color("#2D2D2D")
+			// Files: muted gray border and text
 			fgColor = ColorFile
-			borderColor = lipgloss.Color("#4B5563")
+			borderColor = lipgloss.Color("#6B7280")
 		}
 	}
 
-	isSelected := block.Node == t.selected && t.focused
-	if isSelected {
-		bgColor = ColorPrimary
+	isSelected := block.Node == t.selected
+	if isSelected && t.focused {
+		// Bright violet border, white text when focused
 		fgColor = lipgloss.Color("#FFFFFF")
-		borderColor = lipgloss.Color("#FFFFFF")
+		borderColor = ColorPrimary
+	} else if isSelected {
+		// Dimmer selection when unfocused - still visible but not as prominent
+		fgColor = lipgloss.Color("#E0E0E0")
+		borderColor = lipgloss.Color("#9D7CD8") // dimmer violet
 	}
 
 	// Build label
@@ -666,8 +674,6 @@ func (t TreemapPanel) renderBlock(block Block) string {
 		Height(innerH).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
-		BorderBackground(bgColor).
-		Background(bgColor).
 		Foreground(fgColor)
 
 	if isSelected {

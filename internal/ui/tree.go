@@ -345,12 +345,18 @@ func (t TreePanel) buildLine(node *model.Node) string {
 
 // View renders the tree
 func (t TreePanel) View() string {
+	// Account for border (2 rows) so total rendered height matches t.height
+	contentHeight := t.height - 2
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+
 	if t.root == nil {
-		return TreePanelStyle.Width(t.width).Height(t.height).Render("No data")
+		return TreePanelStyle.Width(t.width).Height(contentHeight).Render("No data")
 	}
 
 	var lines []string
-	maxVisible := t.height - 2
+	maxVisible := t.height - 3 // border (2) + 1 for lipgloss height calculation
 	if maxVisible < 1 {
 		maxVisible = 1
 	}
@@ -402,7 +408,7 @@ func (t TreePanel) View() string {
 
 	content := strings.Join(lines, "\n")
 
-	style := TreePanelStyle.Width(t.width).Height(t.height)
+	style := TreePanelStyle.Width(t.width).Height(contentHeight).MaxHeight(t.height)
 	if t.focused {
 		style = style.BorderForeground(ColorPrimary)
 	}

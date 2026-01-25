@@ -52,7 +52,7 @@ var (
 				Padding(0, 1)
 
 	StatsStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E4E4E7"))
+			Foreground(lipgloss.Color("#FFFFFF"))
 
 	// Tree
 	TreePanelStyle = lipgloss.NewStyle().
@@ -94,8 +94,15 @@ var (
 			Padding(0, 1)
 
 	HelpKey = lipgloss.NewStyle().
-		Foreground(ColorCyan). // bright cyan keys
-		Bold(true)
+			Foreground(ColorCyan).
+			Background(lipgloss.Color("#1E3A4C")). // subtle dark cyan bg
+			Padding(0, 1)
+
+	// Inline key hint (for use in text)
+	KeyHint = lipgloss.NewStyle().
+		Foreground(ColorCyan).
+		Background(lipgloss.Color("#1E3A4C")).
+		Padding(0, 1)
 
 	// Change indicators
 	GrewStyle = lipgloss.NewStyle().

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime/pprof"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,8 +26,20 @@ func main() {
 		log.Printf("CPU profiling enabled, writing to %s", cpuProfile)
 	}
 
+	// Check for path argument
+	var scanPath string
+	if len(os.Args) > 1 {
+		path := os.Args[1]
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid path: %v\n", err)
+			os.Exit(1)
+		}
+		scanPath = absPath
+	}
+
 	p := tea.NewProgram(
-		ui.NewApp(),
+		ui.NewApp(Version, scanPath),
 		tea.WithAltScreen(),
 	)
 

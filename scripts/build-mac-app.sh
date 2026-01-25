@@ -6,7 +6,16 @@ APP_NAME="DiskDive"
 BINARY_NAME="diskdive"
 ICON_PNG="icon.png"
 BUNDLE_ID="com.lumipallolabs.diskdive"
-VERSION="${VERSION:-1.0.0}"
+
+# Read version from VERSION file (single source of truth)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+if [ -f "$PROJECT_ROOT/VERSION" ]; then
+    VERSION="$(cat "$PROJECT_ROOT/VERSION" | tr -d '[:space:]')"
+else
+    echo "Error: VERSION file not found"
+    exit 1
+fi
 
 # Signing configuration (set these environment variables to enable signing)
 # SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
@@ -14,9 +23,7 @@ VERSION="${VERSION:-1.0.0}"
 # TEAM_ID="YOURTEAMID"
 # NOTARIZE_PASSWORD="@keychain:notarytool" or app-specific password
 
-# Paths
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# Paths (SCRIPT_DIR and PROJECT_ROOT already set above)
 BUILD_DIR="$PROJECT_ROOT/build"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 DMG_NAME="$APP_NAME-$VERSION.dmg"
@@ -38,9 +45,11 @@ mkdir -p "$BUILD_DIR"
 
 # Build the Go binary (universal binary for Intel + Apple Silicon)
 # CGO is required for fsevents on macOS
+# Version is injected via ldflags
 echo "==> Compiling universal binary..."
-CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -o "$BUILD_DIR/${BINARY_NAME}-amd64" .
-CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -o "$BUILD_DIR/${BINARY_NAME}-arm64" .
+LDFLAGS="-X main.Version=$VERSION"
+CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -ldflags "$LDFLAGS" -o "$BUILD_DIR/${BINARY_NAME}-amd64" .
+CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o "$BUILD_DIR/${BINARY_NAME}-arm64" .
 lipo -create -output "$BUILD_DIR/$BINARY_NAME" "$BUILD_DIR/${BINARY_NAME}-amd64" "$BUILD_DIR/${BINARY_NAME}-arm64"
 rm "$BUILD_DIR/${BINARY_NAME}-amd64" "$BUILD_DIR/${BINARY_NAME}-arm64"
 
@@ -193,11 +202,11 @@ rm -f "$BUILD_DIR/AppIcon.icns"
 
 echo ""
 echo "==> Build complete!"
+echo "    Version: $VERSION (from VERSION file)"
 echo "    App bundle: $APP_BUNDLE"
 echo "    DMG: $BUILD_DIR/$DMG_NAME"
 echo ""
-echo "Usage:"
-echo "  VERSION=1.2.3 $0                    # Set version"
+echo "To change version, edit the VERSION file in the project root."
 echo ""
 echo "For signed builds, set these environment variables (or use .env file):"
 echo "  SIGN_IDENTITY=\"<certificate hash or name>\""

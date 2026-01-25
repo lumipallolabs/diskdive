@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -59,6 +60,11 @@ type focusDebounceMsg struct {
 // spinnerTickMsg triggers spinner animation
 type spinnerTickMsg struct{}
 
+// scanCompleteDelayMsg is sent after showing "complete" for a moment
+type scanCompleteDelayMsg struct {
+	root *model.Node
+}
+
 // watcherEventMsg is sent when the filesystem watcher detects a change
 type watcherEventMsg struct {
 	event watcher.Event
@@ -69,13 +75,15 @@ type startWatcherMsg struct {
 	root string
 }
 
-// Spinner frames - cyberpunk style
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+// Spinner frames - modern braille dots spinner
+var spinnerFrames = []string{
+	"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+}
 
 // Timing constants
 const (
 	spinnerTickInterval  = 80 * time.Millisecond
-	borderRotationSpeed  = 50  // milliseconds per frame
+	borderRotationSpeed  = 33  // milliseconds per frame (faster spin)
 	focusDebounceTimeout = 300 * time.Millisecond
 )
 
@@ -88,13 +96,15 @@ type Phase struct {
 var phases = []Phase{
 	{0, "Scanning files"},
 	{1, "Computing sizes"},
-	{2, ""}, // phaseDone has no display name
+	{2, "Complete"},
+	{3, ""}, // phaseDone has no display name
 }
 
 // Phase IDs for easy reference
 const (
 	phaseScanning = iota
 	phaseComputingSizes
+	phaseComplete
 	phaseDone
 )
 
@@ -118,8 +128,9 @@ type App struct {
 	freedLifetime    int64
 
 	// Data
-	drives []model.Drive
-	root   *model.Node
+	drives     []model.Drive
+	root       *model.Node
+	customPath string // optional path from command line
 
 	// UI state
 	activePanel Panel
@@ -127,8 +138,9 @@ type App struct {
 	scanning       bool
 	scanPhase      int       // current phase index (0-4)
 	scanStartTime  time.Time // when scan started
-	scanFileCount  string    // "1,234 files" from scanning
-	scanBytesFound string    // "50 GB" from scanning
+	scanFileCount   string // "1,234 files" from scanning
+	scanBytesFound  string // "50 GB" from scanning
+	scanBytesRaw    int64  // raw bytes for progress calculation
 	err            error
 	spinnerFrame   int
 	focusVersion   int // incremented on each selection, used for debouncing
@@ -139,13 +151,39 @@ type App struct {
 }
 
 // NewApp creates a new application instance
-func NewApp() App {
+// scanPath is optional - if provided, scans that path instead of a drive
+func NewApp(version string, scanPath string) App {
 	drives, _ := model.GetDrives()
 
 	// Initialize and load stats
 	statsMgr := stats.NewManager()
 	if err := statsMgr.Load(); err != nil {
 		logging.Debug.Printf("Failed to load stats: %v", err)
+	}
+
+	// If custom path provided, skip drive selection logic
+	if scanPath != "" {
+		app := App{
+			header:        NewHeader(drives, version),
+			tree:          NewTreePanel(),
+			treemap:       NewTreemapPanel(),
+			help:          NewHelpOverlay(),
+			driveSelector: NewDriveSelector(drives),
+			keys:          DefaultKeyMap(),
+			scanner:       scanner.NewWalker(8),
+			statsManager:  statsMgr,
+			freedLifetime: statsMgr.FreedLifetime(),
+			drives:        drives,
+			customPath:    scanPath,
+			activePanel:   PanelTree,
+			showDiff:      true,
+			scanning:      true,
+		}
+		app.tree.SetFocused(true)
+		app.treemap.SetFocused(false)
+		app.header.SetScanning(true, "")
+		app.header.SetFreedStats(app.freedThisSession, app.freedLifetime)
+		return app
 	}
 
 	// Check if there's a saved default drive that's still available
@@ -162,7 +200,7 @@ func NewApp() App {
 	showDriveSelector := defaultIdx < 0 && len(drives) > 0
 
 	app := App{
-		header:        NewHeader(drives),
+		header:        NewHeader(drives, version),
 		tree:          NewTreePanel(),
 		treemap:       NewTreemapPanel(),
 		help:          NewHelpOverlay(),
@@ -201,9 +239,8 @@ func (a App) Init() tea.Cmd {
 	// Set terminal title
 	titleCmd := tea.SetWindowTitle("DISKDIVE")
 
-	// Only start scanning if we have drives and drive selector is not visible
-	// (drive selector is shown on first run or when saved default is unavailable)
-	if len(a.drives) > 0 && !a.driveSelector.IsVisible() {
+	// Start scanning if we have a custom path or a valid drive
+	if a.customPath != "" || (len(a.drives) > 0 && !a.driveSelector.IsVisible()) {
 		return tea.Batch(titleCmd, func() tea.Msg {
 			return scanStartMsg{}
 		})
@@ -237,7 +274,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case scanStartMsg:
 		// Now actually start the scan and spinner
-		if drive := a.header.Selected(); drive != nil {
+		var scanPath string
+		if a.customPath != "" {
+			scanPath = a.customPath
+		} else if drive := a.header.Selected(); drive != nil {
+			scanPath = drive.Path
+		}
+		if scanPath != "" {
 			a.scanPhase = phaseScanning
 			a.scanStartTime = time.Now()
 			a.scanFileCount = ""
@@ -246,7 +289,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return spinnerTickMsg{}
 			})
 			progressCmd := a.listenForProgress()
-			return a, tea.Batch(a.startScan(drive.Path), spinnerCmd, progressCmd)
+			return a, tea.Batch(a.startScan(scanPath), spinnerCmd, progressCmd)
 		}
 		return a, nil
 
@@ -278,8 +321,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case computeSizesDoneMsg:
-		logging.Debug.Printf("[UI] Diff complete, showing data to user (cache save in background)")
-		// Show data immediately, save cache in background
+		logging.Debug.Printf("[UI] Sizes computed, showing complete for a moment")
+		// Show "Complete" phase for 500ms before transitioning
+		a.scanPhase = phaseComplete
+		return a, tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+			return scanCompleteDelayMsg{root: msg.root}
+		})
+
+	case scanCompleteDelayMsg:
+		logging.Debug.Printf("[UI] Complete delay done, showing data to user")
+		// Now actually show the data
 		a.scanning = false
 		a.scanPhase = phaseDone
 		a.root = msg.root
@@ -337,6 +388,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case scanProgressMsg:
 		a.scanFileCount = fmt.Sprintf("%d files", msg.progress.FilesScanned)
 		a.scanBytesFound = FormatSize(msg.progress.BytesFound)
+		a.scanBytesRaw = msg.progress.BytesFound
 		elapsed := time.Since(a.scanStartTime).Truncate(time.Second)
 		progress := fmt.Sprintf("%s, %s, %s", a.scanFileCount, a.scanBytesFound, elapsed)
 		a.header.SetScanning(true, progress)
@@ -597,12 +649,20 @@ func (a *App) syncSelection() tea.Cmd {
 	}
 	a.treemap.SetSelected(node)
 
-	// Schedule debounced focus update for directories
+	// Determine focus target: for files, show parent directory so file appears among siblings
+	var focusTarget *model.Node
 	if node.IsDir && len(node.Children) > 0 {
+		focusTarget = node
+	} else if !node.IsDir && node.Parent != nil {
+		focusTarget = node.Parent
+	}
+
+	// Schedule debounced focus update
+	if focusTarget != nil {
 		a.focusVersion++
 		version := a.focusVersion
 		return tea.Tick(focusDebounceTimeout, func(t time.Time) tea.Msg {
-			return focusDebounceMsg{version: version, node: node}
+			return focusDebounceMsg{version: version, node: focusTarget}
 		})
 	}
 	return nil
@@ -699,7 +759,7 @@ func (a *App) findNodeByPath(node *model.Node, path string) *model.Node {
 	return nil
 }
 
-// openInExplorer opens the selected directory in the system file manager
+// openInExplorer opens the selected item in the system file manager (revealed with selection)
 func (a *App) openInExplorer() tea.Cmd {
 	node := a.tree.Selected()
 	if node == nil {
@@ -707,15 +767,9 @@ func (a *App) openInExplorer() tea.Cmd {
 		return nil
 	}
 
-	path := node.Path
-	// If it's a file, open its parent directory
-	if !node.IsDir && node.Parent != nil {
-		path = node.Parent.Path
-	}
-
-	logging.Debug.Printf("openInExplorer: opening %s", path)
-	// Open in file manager (platform-specific implementation)
-	if err := openInFileManager(path); err != nil {
+	logging.Debug.Printf("openInExplorer: revealing %s", node.Path)
+	// Open in file manager (platform-specific implementation reveals item in parent)
+	if err := openInFileManager(node.Path); err != nil {
 		logging.Debug.Printf("openInExplorer: error: %v", err)
 	}
 	return nil
@@ -723,14 +777,17 @@ func (a *App) openInExplorer() tea.Cmd {
 
 // updateLayout calculates component sizes based on window dimensions
 func (a *App) updateLayout() {
-	// Header height (1 line + padding)
-	headerHeight := 1
+	// Header height (2 lines + separator)
+	headerHeight := 3
 
 	// Help bar height (1 line)
 	helpBarHeight := 1
 
+	// Info bar height (1 line + separator)
+	infoBarHeight := 2
+
 	// Available height for panels
-	panelHeight := a.height - headerHeight - helpBarHeight - 2
+	panelHeight := a.height - headerHeight - helpBarHeight - infoBarHeight
 	if panelHeight < 1 {
 		panelHeight = 1
 	}
@@ -756,25 +813,36 @@ func (a *App) updateLayout() {
 // renderSpinningBorder draws a box with a gradient border that spins over time
 func renderSpinningBorder(content string, width, height int, t time.Time) string {
 	// Cyberpunk neon gradient: cyan → blue → purple → magenta → pink
+	// Use theme colors with smooth transitions: cyan -> teal -> violet -> pink -> back
 	shades := []string{
 		"#00FFFF", // cyan
-		"#00D4FF", // light blue
-		"#00AAFF", // sky blue
-		"#0080FF", // blue
-		"#4060FF", // indigo
-		"#8040FF", // violet
-		"#A020F0", // purple
-		"#C020C0", // magenta
-		"#E040A0", // pink-magenta
-		"#FF60B0", // hot pink
-		"#E040A0", // pink-magenta
-		"#C020C0", // magenta
-		"#A020F0", // purple
-		"#8040FF", // violet
-		"#4060FF", // indigo
-		"#0080FF", // blue
-		"#00AAFF", // sky blue
-		"#00D4FF", // light blue
+		"#30EBE0", // cyan->teal
+		"#5EEAD4", // teal
+		"#70E0D8", //
+		"#85D5E0", // teal->violet
+		"#9AC5E8", //
+		"#A8B0F0", //
+		"#B89AF8", //
+		"#C084FC", // violet
+		"#C880F0", //
+		"#D080E8", // violet->pink
+		"#D87CDE", //
+		"#E07CD4", //
+		"#F079CC", //
+		"#FF79C6", // pink
+		"#F079CC", //
+		"#E07CD4", // pink->violet
+		"#D87CDE", //
+		"#D080E8", //
+		"#C880F0", //
+		"#C084FC", // violet
+		"#B89AF8", //
+		"#A8B0F0", //
+		"#9AC5E8", // violet->teal
+		"#85D5E0", //
+		"#70E0D8", //
+		"#5EEAD4", // teal
+		"#30EBE0", // teal->cyan
 	}
 
 	// Calculate perimeter positions
@@ -860,6 +928,102 @@ func renderSpinningBorder(content string, width, height int, t time.Time) string
 	return result.String()
 }
 
+// infoBar creates the info bar showing details about the selected node
+func (a App) infoBar() string {
+	node := a.tree.Selected()
+	if node == nil {
+		return ""
+	}
+
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
+	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	iconStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
+	fieldSep := dimStyle
+
+	// Get file info
+	var modTimeStr, createTimeStr string
+	if info, err := os.Stat(node.Path); err == nil {
+		now := time.Now()
+
+		// Modification time
+		modTime := info.ModTime()
+		if modTime.Year() == now.Year() {
+			modTimeStr = modTime.Format("Jan 2 15:04")
+		} else {
+			modTimeStr = modTime.Format("Jan 2, 2006")
+		}
+
+		// Creation time (platform-specific)
+		if createTime := getCreationTime(info); !createTime.IsZero() {
+			if createTime.Year() == now.Year() {
+				createTimeStr = createTime.Format("Jan 2 15:04")
+			} else {
+				createTimeStr = createTime.Format("Jan 2, 2006")
+			}
+		}
+	}
+
+	// Type icon
+	var icon string
+	if node.IsDir {
+		icon = iconStyle.Render("📁")
+	} else {
+		icon = iconStyle.Render("📄")
+	}
+
+	// Build info parts
+	sep := fieldSep.Render(" │ ")
+	name := nameStyle.Render(node.Name)
+	size := dimStyle.Render(FormatSize(node.TotalSize()))
+
+	var parts []string
+	parts = append(parts, icon, " ", name, sep, size)
+
+	// For directories, show file count
+	if node.IsDir {
+		count := countFiles(node)
+		countStr := dimStyle.Render(fmt.Sprintf("%d files", count))
+		parts = append(parts, sep, countStr)
+	}
+
+	// Add creation time if available
+	if createTimeStr != "" {
+		createLabel := dimStyle.Render("Created: " + createTimeStr)
+		parts = append(parts, sep, createLabel)
+	}
+
+	// Add modification time if available
+	if modTimeStr != "" {
+		modLabel := dimStyle.Render("Modified: " + modTimeStr)
+		parts = append(parts, sep, modLabel)
+	}
+
+	line := " " + strings.Join(parts, "") // Add left padding to align with panel content
+
+	// Truncate if too long
+	if lipgloss.Width(line) > a.width {
+		line = lipgloss.NewStyle().MaxWidth(a.width).Render(line)
+	}
+
+	// Add divider underneath (same style as header separator)
+	sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#3F3F46"))
+	separator := sepStyle.Render(strings.Repeat("─", a.width))
+
+	return line + "\n" + separator
+}
+
+// countFiles counts all files (not directories) in a node tree
+func countFiles(node *model.Node) int {
+	if !node.IsDir {
+		return 1
+	}
+	count := 0
+	for _, child := range node.Children {
+		count += countFiles(child)
+	}
+	return count
+}
+
 // View implements tea.Model
 func (a App) View() string {
 
@@ -896,11 +1060,29 @@ func (a App) View() string {
 
 		// Styles for different states
 		doneStyle := lipgloss.NewStyle().Foreground(ColorSuccess)
-		activeStyle := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true)
+		spinnerStyle := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true)
 
 		// Time-based spinner
 		spinnerIdx := int(time.Now().UnixMilli()/int64(spinnerTickInterval.Milliseconds())) % len(spinnerFrames)
 		spinner := spinnerFrames[spinnerIdx]
+
+		// Calculate scan progress for dots (based on bytes scanned vs used disk space)
+		// Only show progress bar when scanning a full drive (not custom paths)
+		var progressBar string
+		if a.customPath == "" && a.header.Selected() != nil && a.header.Selected().UsedBytes() > 0 {
+			drive := a.header.Selected()
+			progress := float64(a.scanBytesRaw) / float64(drive.UsedBytes())
+			if progress > 1.0 {
+				progress = 1.0
+			}
+			maxDots := 20 // max dots at 100% (fits in panel with brackets)
+			numDots := int(progress * float64(maxDots))
+			emptyDots := maxDots - numDots
+			dotStyle := lipgloss.NewStyle().Foreground(ColorCyan)
+			emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#3F3F46"))
+			bracketStyle := lipgloss.NewStyle().Foreground(ColorCyan)
+			progressBar = " " + bracketStyle.Render("[") + dotStyle.Render(strings.Repeat("·", numDots)) + emptyStyle.Render(strings.Repeat("·", emptyDots)) + bracketStyle.Render("]")
+		}
 
 		// Cyberpunk stat styles
 		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")) // dim gray
@@ -914,20 +1096,17 @@ func (a App) View() string {
 				break // Don't show future phases or unnamed phases
 			}
 			var line string
-			if phase.id < a.scanPhase {
-				// Completed phase
+			if phase.id < a.scanPhase || phase.id == phaseComplete {
+				// Completed phase (or the Complete phase itself shows as done)
 				check := doneStyle.Render("✓")
 				text := doneStyle.Render(phase.name)
 				line = fmt.Sprintf("  %s %s", check, text)
 			} else {
-				// Current phase (phase.id == a.scanPhase)
-				spin := activeStyle.Render(spinner)
-				text := activeStyle.Render(phase.name)
-				// Animated scanning bar
-				scanFrames := []string{"▱▱▱", "▰▱▱", "▰▰▱", "▰▰▰", "▱▰▰", "▱▱▰"}
-				frameIdx := int(time.Now().UnixMilli()/150) % len(scanFrames)
-				scanBar := activeStyle.Render(" " + scanFrames[frameIdx])
-				line = fmt.Sprintf("  %s %s%s", spin, text, scanBar)
+				// Current phase with spinner
+				spin := spinnerStyle.Render(spinner)
+				textStyle := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true)
+				text := textStyle.Render(phase.name)
+				line = fmt.Sprintf("  %s %s%s", spin, text, progressBar)
 			}
 			logLines = append(logLines, line)
 		}
@@ -969,6 +1148,11 @@ func (a App) View() string {
 		treemapView := a.treemap.View()
 		panels := lipgloss.JoinHorizontal(lipgloss.Top, treeView, treemapView)
 		sections = append(sections, panels)
+
+		// Info bar (shows selected item details)
+		if infoBar := a.infoBar(); infoBar != "" {
+			sections = append(sections, infoBar)
+		}
 	}
 
 	// Help bar at bottom
