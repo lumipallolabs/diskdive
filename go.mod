@@ -8,6 +8,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/fsnotify/fsevents v0.2.0
+	github.com/gabriel-vasile/mimetype v1.4.12
 	github.com/jeffwilliams/squarify v0.0.0-20150517023534-f38712eec14e
 	golang.org/x/sys v0.36.0
 )

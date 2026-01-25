@@ -8,7 +8,7 @@ import (
 	"runtime/pprof"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/samuli/diskdive/internal/ui"
+	"github.com/samuli/diskdive/internal/ui/tui"
 )
 
 func main() {
@@ -39,7 +39,7 @@ func main() {
 	}
 
 	p := tea.NewProgram(
-		ui.NewApp(Version, scanPath),
+		tui.NewApp(Version, scanPath),
 		tea.WithAltScreen(),
 	)
 
