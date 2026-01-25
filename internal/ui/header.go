@@ -18,6 +18,8 @@ type Header struct {
 	width        int
 	scanning     bool
 	scanProgress string
+	freedSession int64
+	freedTotal   int64
 }
 
 // NewHeader creates a new header component
@@ -52,6 +54,12 @@ func (h Header) Selected() *model.Drive {
 func (h *Header) SetScanning(scanning bool, progress string) {
 	h.scanning = scanning
 	h.scanProgress = progress
+}
+
+// SetFreedStats sets the freed space statistics
+func (h *Header) SetFreedStats(session, total int64) {
+	h.freedSession = session
+	h.freedTotal = total
 }
 
 // ScanProgress returns the current scan progress text
@@ -89,6 +97,16 @@ func (h Header) View() string {
 	}
 	driveTabs := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 
+	// Freed stats (show in middle when either counter > 0)
+	var freedStats string
+	if h.freedSession > 0 || h.freedTotal > 0 {
+		freedLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Render("Freed: ")
+		freedSessionStr := lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399")).Render(FormatSize(h.freedSession) + " session")
+		freedSep := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Render(" | ")
+		freedTotalStr := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Render(FormatSize(h.freedTotal) + " total")
+		freedStats = freedLabel + freedSessionStr + freedSep + freedTotalStr
+	}
+
 	// Stats (only show when not scanning - scanning status shown in center panel)
 	var stats string
 	if !h.scanning {
@@ -108,17 +126,31 @@ func (h Header) View() string {
 		}
 	}
 
-	// Layout: app name, tabs on left, stats on right
+	// Layout: app name, tabs on left, freed in middle, disk usage on right
 	appNameWidth := lipgloss.Width(appName)
 	tabsWidth := lipgloss.Width(driveTabs)
+	freedWidth := lipgloss.Width(freedStats)
 	statsWidth := lipgloss.Width(stats)
-	gap := h.width - appNameWidth - tabsWidth - statsWidth - 4 // -4 for padding and separators
-	if gap < 1 {
-		gap = 1
+
+	// Calculate gaps to distribute remaining space
+	totalContent := appNameWidth + tabsWidth + freedWidth + statsWidth + 4 // +4 for separators
+	remainingSpace := h.width - totalContent
+	if remainingSpace < 2 {
+		remainingSpace = 2
 	}
 
-	sep := lipgloss.NewStyle().Foreground(lipgloss.Color("#4A5568")).Render(" │ ")
-	line := appName + sep + driveTabs + strings.Repeat(" ", gap) + stats
+	// Split remaining space: more on left side of freed stats to push it toward center
+	leftGap := remainingSpace / 2
+	rightGap := remainingSpace - leftGap
+	if leftGap < 1 {
+		leftGap = 1
+	}
+	if rightGap < 1 {
+		rightGap = 1
+	}
+
+	sep := lipgloss.NewStyle().Foreground(ColorBorder).Render(" │ ")
+	line := appName + sep + driveTabs + strings.Repeat(" ", leftGap) + freedStats + strings.Repeat(" ", rightGap) + stats
 
 	return HeaderStyle.Render(line)
 }

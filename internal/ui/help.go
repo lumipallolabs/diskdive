@@ -77,34 +77,34 @@ func (h HelpOverlay) View() string {
 	// Navigation section
 	content.WriteString(sectionStyle.Render("NAVIGATION"))
 	content.WriteString("\n")
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "arrows/hjkl", "Navigate"))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "PgUp/PgDn", "Scroll faster"))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "g/G", "Jump to top/bottom"))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "Tab", "Switch panel"))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "arrows/hjkl", "Navigate", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "PgUp/PgDn", "Scroll faster", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "g/G", "Jump to top/bottom", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "Tab", "Switch panel", true))
 
 	// Actions section
 	content.WriteString(sectionStyle.Render("ACTIONS"))
 	content.WriteString("\n")
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "Enter", "Zoom into directory"))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "Esc/⌫", "Go back / Close overlay"))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "Space", "Select drive"))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "o", "Open in Explorer"))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "r", "Rescan drive"))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "d", "Toggle diff mode"))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "Enter", "Zoom into directory", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "Esc/⌫", "Go back / Close overlay", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "Space", "Select drive", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "o", "Open in Explorer", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "r", "Rescan drive", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "d", "Toggle diff mode", true))
 
 	// Other section
 	content.WriteString(sectionStyle.Render("OTHER"))
 	content.WriteString("\n")
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "?", "Toggle this help"))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "q", "Quit"))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "?", "Toggle this help", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "q", "Quit", true))
 
 	// Diff colors section
 	content.WriteString(sectionStyle.Render("DIFF COLORS"))
 	content.WriteString("\n")
-	content.WriteString(formatColorLine(ColorNew, "New item"))
-	content.WriteString(formatColorLine(ColorGrew, "Size increased"))
-	content.WriteString(formatColorLine(ColorShrunk, "Size decreased"))
-	content.WriteString(formatColorLineNoNewline(ColorMixed, "Mixed changes"))
+	content.WriteString(formatColorLine(ColorNew, "New item", true))
+	content.WriteString(formatColorLine(ColorGrew, "Size increased", true))
+	content.WriteString(formatColorLine(ColorShrunk, "Size decreased", true))
+	content.WriteString(formatColorLine(ColorMixed, "Mixed changes", false))
 
 	box := boxStyle.Render(content.String())
 
@@ -113,27 +113,23 @@ func (h HelpOverlay) View() string {
 }
 
 // formatHelpLine formats a single help line with key and description
-func formatHelpLine(keyStyle, descStyle lipgloss.Style, key, desc string) string {
-	return keyStyle.Width(helpKeyColumnWidth).Render(key) + descStyle.Render(desc) + "\n"
-}
-
-// formatHelpLineNoNewline formats a help line without trailing newline
-func formatHelpLineNoNewline(keyStyle, descStyle lipgloss.Style, key, desc string) string {
-	return keyStyle.Width(helpKeyColumnWidth).Render(key) + descStyle.Render(desc)
+func formatHelpLine(keyStyle, descStyle lipgloss.Style, key, desc string, newline bool) string {
+	line := keyStyle.Width(helpKeyColumnWidth).Render(key) + descStyle.Render(desc)
+	if newline {
+		return line + "\n"
+	}
+	return line
 }
 
 // formatColorLine formats a color indicator line
-func formatColorLine(color lipgloss.Color, desc string) string {
+func formatColorLine(color lipgloss.Color, desc string, newline bool) string {
 	colorStyle := lipgloss.NewStyle().Foreground(color)
-	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#E4E4E7"))
-	return colorStyle.Width(helpKeyColumnWidth).Render("████") + descStyle.Render(desc) + "\n"
-}
-
-// formatColorLineNoNewline formats a color indicator line without trailing newline
-func formatColorLineNoNewline(color lipgloss.Color, desc string) string {
-	colorStyle := lipgloss.NewStyle().Foreground(color)
-	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#E4E4E7"))
-	return colorStyle.Width(helpKeyColumnWidth).Render("████") + descStyle.Render(desc)
+	descStyle := lipgloss.NewStyle().Foreground(ColorText)
+	line := colorStyle.Width(helpKeyColumnWidth).Render("████") + descStyle.Render(desc)
+	if newline {
+		return line + "\n"
+	}
+	return line
 }
 
 // HelpBar renders a bottom help bar with key hints

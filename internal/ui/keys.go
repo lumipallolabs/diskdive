@@ -17,7 +17,6 @@ type KeyMap struct {
 	Back         key.Binding
 	Rescan       key.Binding
 	ToggleDiff   key.Binding
-	CycleSort    key.Binding
 	Help         key.Binding
 	Quit         key.Binding
 	SelectDrive  key.Binding
@@ -79,10 +78,6 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("d"),
 			key.WithHelp("d", "toggle diff"),
 		),
-		CycleSort: key.NewBinding(
-			key.WithKeys("s"),
-			key.WithHelp("s", "cycle sort"),
-		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
 			key.WithHelp("?", "help"),
@@ -113,7 +108,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.Left, k.Right},
 		{k.Top, k.Bottom, k.Tab},
 		{k.Enter, k.Back},
-		{k.Rescan, k.ToggleDiff, k.CycleSort},
+		{k.Rescan, k.ToggleDiff},
 		{k.Help, k.Quit},
 	}
 }

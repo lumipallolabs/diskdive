@@ -105,7 +105,10 @@ func (c *Cache) LoadLatest(driveLetter string) (*model.Node, error) {
 // Timestamp returns the timestamp of the latest cache
 func (c *Cache) Timestamp(driveLetter string) (time.Time, error) {
 	pattern := filepath.Join(c.dir, fmt.Sprintf("%s_*.gob.gz", driveLetter))
-	files, _ := filepath.Glob(pattern)
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("glob error: %w", err)
+	}
 	if len(files) == 0 {
 		return time.Time{}, fmt.Errorf("no cache")
 	}

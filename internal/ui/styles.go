@@ -8,17 +8,19 @@ import (
 
 // Colors - cyberpunk/neon palette
 var (
-	ColorPrimary   = lipgloss.Color("#C084FC") // soft violet
-	ColorSecondary = lipgloss.Color("#BD93F9") // soft purple
-	ColorSuccess   = lipgloss.Color("#39FF14") // neon green
-	ColorWarning   = lipgloss.Color("#FFB86C") // orange
-	ColorDanger    = lipgloss.Color("#FF5555") // red
-	ColorMuted     = lipgloss.Color("#4A5568") // darker muted
-	ColorBorder    = lipgloss.Color("#4A5568") // border
-	ColorCyan      = lipgloss.Color("#00FFFF") // neon cyan
-	ColorSize      = lipgloss.Color("#39FF14") // neon green for sizes
-	ColorDir       = lipgloss.Color("#00FFFF") // cyan for directories
-	ColorFile      = lipgloss.Color("#A0A0A0") // dimmer for files
+	ColorPrimary    = lipgloss.Color("#C084FC") // soft violet
+	ColorSecondary  = lipgloss.Color("#BD93F9") // soft purple
+	ColorSuccess    = lipgloss.Color("#39FF14") // neon green
+	ColorWarning    = lipgloss.Color("#FFB86C") // orange
+	ColorDanger     = lipgloss.Color("#FF5555") // red
+	ColorMuted      = lipgloss.Color("#4A5568") // darker muted
+	ColorBorder     = lipgloss.Color("#4A5568") // border
+	ColorBackground = lipgloss.Color("#1F1F23") // dark background
+	ColorCyan       = lipgloss.Color("#00FFFF") // neon cyan
+	ColorSize       = lipgloss.Color("#39FF14") // neon green for sizes
+	ColorDir        = lipgloss.Color("#00FFFF") // cyan for directories
+	ColorFile       = lipgloss.Color("#A0A0A0") // dimmer for files
+	ColorText       = lipgloss.Color("#E4E4E7") // default text
 
 	// Change colors (warm/cool palette - colorblind friendly)
 	ColorGrew       = lipgloss.Color("#FFB86C") // orange - growth
@@ -35,7 +37,7 @@ var (
 var (
 	// Header
 	HeaderStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("#1F1F23")).
+			Background(ColorBackground).
 			Padding(0, 1)
 
 	DriveTabActive = lipgloss.NewStyle().
@@ -107,6 +109,14 @@ var (
 			Foreground(lipgloss.Color("#000000")).
 			Padding(0, 1).
 			Bold(true)
+
+	DeletedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#6B7280")) // muted gray
+
+	DeletedBadge = lipgloss.NewStyle().
+			Background(lipgloss.Color("#374151")). // dark gray
+			Foreground(lipgloss.Color("#9CA3AF")). // light gray
+			Padding(0, 1)
 )
 
 // FormatSize formats bytes to human readable string
@@ -118,16 +128,28 @@ func FormatSize(bytes int64) string {
 		TB = GB * 1024
 	)
 
+	// Handle negative values
+	negative := bytes < 0
+	if negative {
+		bytes = -bytes
+	}
+
+	var result string
 	switch {
 	case bytes >= TB:
-		return fmt.Sprintf("%.1fTB", float64(bytes)/TB)
+		result = fmt.Sprintf("%.1fTB", float64(bytes)/TB)
 	case bytes >= GB:
-		return fmt.Sprintf("%.1fGB", float64(bytes)/GB)
+		result = fmt.Sprintf("%.1fGB", float64(bytes)/GB)
 	case bytes >= MB:
-		return fmt.Sprintf("%.1fMB", float64(bytes)/MB)
+		result = fmt.Sprintf("%.1fMB", float64(bytes)/MB)
 	case bytes >= KB:
-		return fmt.Sprintf("%.1fKB", float64(bytes)/KB)
+		result = fmt.Sprintf("%.1fKB", float64(bytes)/KB)
 	default:
-		return fmt.Sprintf("%dB", bytes)
+		result = fmt.Sprintf("%dB", bytes)
 	}
+
+	if negative {
+		return "-" + result
+	}
+	return result
 }

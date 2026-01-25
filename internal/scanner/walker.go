@@ -53,28 +53,17 @@ func (w *Walker) Scan(ctx context.Context, root string) (*model.Node, error) {
 	// Get platform-specific root info for mount point detection
 	rootInfo := getPlatformRootInfo(absRoot)
 
-	// Use channels for lock-free entry collection
-	entryChan := make(chan nodeEntry, 50000)
-	var entries []nodeEntry
-	var entriesWg sync.WaitGroup
-
-	// Collect entries in background without blocking
-	entriesWg.Add(1)
-	go func() {
-		defer entriesWg.Done()
-		collected := make([]nodeEntry, 0, 5000000)
-		for e := range entryChan {
-			collected = append(collected, e)
-		}
-		entries = collected
-	}()
+	// Collect entries with mutex - simpler and faster than channel for high throughput
+	entries := make([]nodeEntry, 0, 5000000)
+	var entriesMu sync.Mutex
 
 	// Track seen paths/inodes for deduplication
 	var seenItems sync.Map
 
 	// Configure fastwalk
 	conf := &fastwalk.Config{
-		Follow: false, // Don't follow symlinks
+		Follow:     false, // Don't follow symlinks
+		NumWorkers: w.workers,
 	}
 
 	// Walk filesystem with fastwalk
@@ -122,20 +111,18 @@ func (w *Walker) Scan(ctx context.Context, root string) (*model.Node, error) {
 			atomic.AddInt64(&w.progress.DirsScanned, 1)
 		}
 
-		// Send to channel (lock-free)
-		entryChan <- nodeEntry{
+		// Append to entries slice
+		entriesMu.Lock()
+		entries = append(entries, nodeEntry{
 			path:  path,
 			name:  d.Name(),
 			size:  size,
 			isDir: d.IsDir(),
-		}
+		})
+		entriesMu.Unlock()
 
 		return nil
 	})
-
-	// Close channel and wait for collector to finish
-	close(entryChan)
-	entriesWg.Wait()
 
 	if walkErr != nil && walkErr != ctx.Err() {
 		close(w.progressCh)

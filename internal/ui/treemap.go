@@ -2,27 +2,14 @@ package ui
 
 import (
 	"fmt"
-	"log"
 	"math"
-	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jeffwilliams/squarify"
 	"github.com/samuli/diskdive/internal/model"
 )
-
-var treemapDebugLog *log.Logger
-
-func init() {
-	f, err := os.OpenFile("debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	treemapDebugLog = log.New(f, "", log.Lmicroseconds)
-}
 
 // Block represents a rectangle in the treemap
 type Block struct {
@@ -256,13 +243,6 @@ const (
 
 // layout calculates block positions using the squarify library
 func (t *TreemapPanel) layout() {
-	start := time.Now()
-	defer func() {
-		if treemapDebugLog != nil {
-			treemapDebugLog.Printf("TreemapPanel.layout: %v", time.Since(start))
-		}
-	}()
-
 	t.blocks = nil
 	t.cacheValid = false // Invalidate render cache
 
@@ -526,13 +506,6 @@ func (t *TreemapPanel) layout() {
 
 // View renders the treemap
 func (t *TreemapPanel) View() string {
-	start := time.Now()
-	defer func() {
-		if treemapDebugLog != nil {
-			treemapDebugLog.Printf("TreemapPanel.View: %v (cached=%v)", time.Since(start), t.cacheValid)
-		}
-	}()
-
 	if t.focus == nil {
 		return TreemapPanelStyle.Render("No data")
 	}
@@ -637,28 +610,11 @@ func (t TreemapPanel) renderBlock(block Block) string {
 		bgColor = lipgloss.Color("#3D3D3D")
 		fgColor = lipgloss.Color("#9CA3AF")
 		borderColor = lipgloss.Color("#4B5563")
-	} else if t.showDiff && block.Node != nil {
-		if block.Node.IsNew {
-			bgColor = ColorNew
-			fgColor = lipgloss.Color("#000000")
-			borderColor = ColorNew
-		} else if block.Node.IsDir && block.Node.HasGrew && block.Node.HasShrunk {
-			bgColor = ColorMixedBg
-			fgColor = ColorMixed
-			borderColor = ColorMixed
-		} else if block.Node.HasGrew {
-			bgColor = ColorGrewBg
-			fgColor = ColorGrew
-			borderColor = ColorGrew
-		} else if block.Node.HasShrunk {
-			bgColor = ColorShrunkBg
-			fgColor = ColorShrunk
-			borderColor = ColorShrunk
-		} else {
-			bgColor = lipgloss.Color("#2D2D2D")
-			fgColor = lipgloss.Color("#9CA3AF")
-			borderColor = lipgloss.Color("#4B5563")
-		}
+	} else if t.showDiff && block.Node != nil && block.Node.IsDeleted {
+		// Deleted items shown in muted gray
+		bgColor = lipgloss.Color("#1A1A1A")
+		fgColor = lipgloss.Color("#6B7280")
+		borderColor = lipgloss.Color("#374151")
 	} else {
 		if block.Node != nil && block.Node.IsDir {
 			bgColor = lipgloss.Color("#1E3A5F")
@@ -719,328 +675,6 @@ func (t TreemapPanel) renderBlock(block Block) string {
 	}
 
 	return blockStyle.Render(text)
-}
-
-// drawBlock draws a single block onto the grid (legacy)
-func (t TreemapPanel) drawBlock(grid [][]rune, colors [][]lipgloss.Style, block Block, gridW, gridH int) {
-	if block.Width < 1 || block.Height < 1 {
-		return
-	}
-
-	// Determine block color
-	var bgColor lipgloss.Color
-	var fgColor lipgloss.Color
-
-	if block.IsGrouped {
-		// Grouped items get a distinct color
-		bgColor = lipgloss.Color("#3D3D3D")
-		fgColor = lipgloss.Color("#9CA3AF")
-	} else if t.showDiff && block.Node != nil {
-		if block.Node.IsNew {
-			// Entirely new item (yellow)
-			bgColor = ColorNew
-			fgColor = lipgloss.Color("#000000")
-		} else if block.Node.IsDir && block.Node.HasGrew && block.Node.HasShrunk {
-			// Folder has both additions and removals (purple/mixed)
-			bgColor = ColorMixedBg
-			fgColor = ColorMixed
-		} else if block.Node.HasGrew {
-			// Item or folder grew / contains only additions (orange)
-			bgColor = ColorGrewBg
-			fgColor = ColorGrew
-		} else if block.Node.HasShrunk {
-			// Item or folder shrunk / contains only removals (cyan)
-			bgColor = ColorShrunkBg
-			fgColor = ColorShrunk
-		} else {
-			bgColor = lipgloss.Color("#2D2D2D")
-			fgColor = lipgloss.Color("#9CA3AF")
-		}
-	} else {
-		// Default coloring based on depth or type
-		if block.Node != nil && block.Node.IsDir {
-			bgColor = lipgloss.Color("#1E3A5F")
-			fgColor = ColorDir
-		} else {
-			bgColor = lipgloss.Color("#2D2D2D")
-			fgColor = ColorFile
-		}
-	}
-
-	// Selection highlight
-	isSelected := block.Node == t.selected && t.focused
-
-	blockStyle := lipgloss.NewStyle().Background(bgColor).Foreground(fgColor)
-	if isSelected {
-		blockStyle = blockStyle.Background(ColorPrimary).Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
-	}
-
-	// Fill block area
-	for y := block.Y; y < block.Y+block.Height && y < gridH; y++ {
-		for x := block.X; x < block.X+block.Width && x < gridW; x++ {
-			if y >= 0 && x >= 0 {
-				grid[y][x] = ' '
-				colors[y][x] = blockStyle
-			}
-		}
-	}
-
-	// Draw border
-	borderStyle := lipgloss.NewStyle().Background(bgColor).Foreground(lipgloss.Color("#4B5563"))
-	if isSelected {
-		borderStyle = borderStyle.Background(ColorPrimary).Foreground(lipgloss.Color("#FFFFFF"))
-	}
-
-	// Top and bottom borders
-	for x := block.X; x < block.X+block.Width && x < gridW; x++ {
-		if x >= 0 {
-			if block.Y >= 0 && block.Y < gridH {
-				grid[block.Y][x] = '\u2500' // horizontal line
-				colors[block.Y][x] = borderStyle
-			}
-			if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH {
-				grid[block.Y+block.Height-1][x] = '\u2500'
-				colors[block.Y+block.Height-1][x] = borderStyle
-			}
-		}
-	}
-
-	// Left and right borders
-	for y := block.Y; y < block.Y+block.Height && y < gridH; y++ {
-		if y >= 0 {
-			if block.X >= 0 && block.X < gridW {
-				grid[y][block.X] = '\u2502' // vertical line
-				colors[y][block.X] = borderStyle
-			}
-			if block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW {
-				grid[y][block.X+block.Width-1] = '\u2502'
-				colors[y][block.X+block.Width-1] = borderStyle
-			}
-		}
-	}
-
-	// Corners
-	if block.Y >= 0 && block.Y < gridH && block.X >= 0 && block.X < gridW {
-		grid[block.Y][block.X] = '\u250C' // top-left
-		colors[block.Y][block.X] = borderStyle
-	}
-	if block.Y >= 0 && block.Y < gridH && block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW {
-		grid[block.Y][block.X+block.Width-1] = '\u2510' // top-right
-		colors[block.Y][block.X+block.Width-1] = borderStyle
-	}
-	if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH && block.X >= 0 && block.X < gridW {
-		grid[block.Y+block.Height-1][block.X] = '\u2514' // bottom-left
-		colors[block.Y+block.Height-1][block.X] = borderStyle
-	}
-	if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH && block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW {
-		grid[block.Y+block.Height-1][block.X+block.Width-1] = '\u2518' // bottom-right
-		colors[block.Y+block.Height-1][block.X+block.Width-1] = borderStyle
-	}
-
-	// Draw label if space permits
-	if block.Width > 4 && block.Height > 2 {
-		var label string
-		var sizeStr string
-
-		if block.IsGrouped {
-			label = fmt.Sprintf("%d more", block.GroupCount)
-			sizeStr = FormatSize(block.GroupSize)
-		} else if block.Node != nil {
-			label = block.Node.Name
-			sizeStr = FormatSize(block.Node.TotalSize())
-		}
-
-		innerW := block.Width - 4
-		innerH := block.Height - 2
-		if innerW < 1 || innerH < 1 {
-			return
-		}
-
-		// Use lipgloss to wrap text (don't set Height - let text be natural size)
-		text := label
-		if innerH > 1 && sizeStr != "" {
-			text = label + "\n" + sizeStr
-		}
-
-		wrapped := lipgloss.NewStyle().Width(innerW).Render(text)
-
-		// Draw wrapped text into grid
-		lines := strings.Split(wrapped, "\n")
-		for dy, line := range lines {
-			if dy >= innerH {
-				break
-			}
-			for dx, ch := range line {
-				if dx >= innerW {
-					break
-				}
-				x, y := block.X+2+dx, block.Y+1+dy
-				if x < gridW && y < gridH {
-					grid[y][x] = ch
-					colors[y][x] = blockStyle
-				}
-			}
-		}
-	}
-}
-
-// drawBlockIndexed draws a single block using style indices for efficient batching
-func (t TreemapPanel) drawBlockIndexed(grid [][]rune, styleIdx [][]int, styles *[]lipgloss.Style, block Block, gridW, gridH int) {
-	if block.Width < 1 || block.Height < 1 {
-		return
-	}
-
-	// Determine block color
-	var bgColor lipgloss.Color
-	var fgColor lipgloss.Color
-
-	if block.IsGrouped {
-		bgColor = lipgloss.Color("#3D3D3D")
-		fgColor = lipgloss.Color("#9CA3AF")
-	} else if t.showDiff && block.Node != nil {
-		if block.Node.IsNew {
-			bgColor = ColorNew
-			fgColor = lipgloss.Color("#000000")
-		} else if block.Node.IsDir && block.Node.HasGrew && block.Node.HasShrunk {
-			bgColor = ColorMixedBg
-			fgColor = ColorMixed
-		} else if block.Node.HasGrew {
-			bgColor = ColorGrewBg
-			fgColor = ColorGrew
-		} else if block.Node.HasShrunk {
-			bgColor = ColorShrunkBg
-			fgColor = ColorShrunk
-		} else {
-			bgColor = lipgloss.Color("#2D2D2D")
-			fgColor = lipgloss.Color("#9CA3AF")
-		}
-	} else {
-		if block.Node != nil && block.Node.IsDir {
-			bgColor = lipgloss.Color("#1E3A5F")
-			fgColor = ColorDir
-		} else {
-			bgColor = lipgloss.Color("#2D2D2D")
-			fgColor = ColorFile
-		}
-	}
-
-	isSelected := block.Node == t.selected && t.focused
-
-	// Create styles and get their indices
-	blockStyle := lipgloss.NewStyle().Background(bgColor).Foreground(fgColor)
-	if isSelected {
-		blockStyle = blockStyle.Background(ColorPrimary).Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
-	}
-	blockIdx := len(*styles)
-	*styles = append(*styles, blockStyle)
-
-	borderStyle := lipgloss.NewStyle().Background(bgColor).Foreground(lipgloss.Color("#4B5563"))
-	if isSelected {
-		borderStyle = borderStyle.Background(ColorPrimary).Foreground(lipgloss.Color("#FFFFFF"))
-	}
-	borderIdx := len(*styles)
-	*styles = append(*styles, borderStyle)
-
-	// Fill block area - but don't overwrite existing border characters
-	isBorder := func(ch rune) bool {
-		return ch == '\u2500' || ch == '\u2502' || ch == '\u250C' || ch == '\u2510' || ch == '\u2514' || ch == '\u2518'
-	}
-	for y := block.Y; y < block.Y+block.Height && y < gridH; y++ {
-		for x := block.X; x < block.X+block.Width && x < gridW; x++ {
-			if y >= 0 && x >= 0 && !isBorder(grid[y][x]) {
-				grid[y][x] = ' '
-				styleIdx[y][x] = blockIdx
-			}
-		}
-	}
-
-	// Draw border - only if cell is empty (don't overwrite adjacent block's border)
-	for x := block.X; x < block.X+block.Width && x < gridW; x++ {
-		if x >= 0 {
-			if block.Y >= 0 && block.Y < gridH && grid[block.Y][x] == ' ' {
-				grid[block.Y][x] = '\u2500'
-				styleIdx[block.Y][x] = borderIdx
-			}
-			if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH && grid[block.Y+block.Height-1][x] == ' ' {
-				grid[block.Y+block.Height-1][x] = '\u2500'
-				styleIdx[block.Y+block.Height-1][x] = borderIdx
-			}
-		}
-	}
-
-	for y := block.Y; y < block.Y+block.Height && y < gridH; y++ {
-		if y >= 0 {
-			if block.X >= 0 && block.X < gridW && grid[y][block.X] == ' ' {
-				grid[y][block.X] = '\u2502'
-				styleIdx[y][block.X] = borderIdx
-			}
-			if block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW && grid[y][block.X+block.Width-1] == ' ' {
-				grid[y][block.X+block.Width-1] = '\u2502'
-				styleIdx[y][block.X+block.Width-1] = borderIdx
-			}
-		}
-	}
-
-	// Corners - only if cell is empty
-	if block.Y >= 0 && block.Y < gridH && block.X >= 0 && block.X < gridW && grid[block.Y][block.X] == ' ' {
-		grid[block.Y][block.X] = '\u250C'
-		styleIdx[block.Y][block.X] = borderIdx
-	}
-	if block.Y >= 0 && block.Y < gridH && block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW && grid[block.Y][block.X+block.Width-1] == ' ' {
-		grid[block.Y][block.X+block.Width-1] = '\u2510'
-		styleIdx[block.Y][block.X+block.Width-1] = borderIdx
-	}
-	if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH && block.X >= 0 && block.X < gridW && grid[block.Y+block.Height-1][block.X] == ' ' {
-		grid[block.Y+block.Height-1][block.X] = '\u2514'
-		styleIdx[block.Y+block.Height-1][block.X] = borderIdx
-	}
-	if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH && block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW && grid[block.Y+block.Height-1][block.X+block.Width-1] == ' ' {
-		grid[block.Y+block.Height-1][block.X+block.Width-1] = '\u2518'
-		styleIdx[block.Y+block.Height-1][block.X+block.Width-1] = borderIdx
-	}
-
-	// Draw label if space permits
-	if block.Width > 4 && block.Height > 2 {
-		var label string
-		var sizeStr string
-
-		if block.IsGrouped {
-			label = fmt.Sprintf("%d more", block.GroupCount)
-			sizeStr = FormatSize(block.GroupSize)
-		} else if block.Node != nil {
-			label = block.Node.Name
-			sizeStr = FormatSize(block.Node.TotalSize())
-		}
-
-		innerW := block.Width - 4
-		innerH := block.Height - 2
-		if innerW < 1 || innerH < 1 {
-			return
-		}
-
-		text := label
-		if innerH > 1 && sizeStr != "" {
-			text = label + "\n" + sizeStr
-		}
-
-		wrapped := lipgloss.NewStyle().Width(innerW).Render(text)
-		lines := strings.Split(wrapped, "\n")
-		for dy, line := range lines {
-			if dy >= innerH {
-				break
-			}
-			for dx, ch := range line {
-				if dx >= innerW {
-					break
-				}
-				x, y := block.X+2+dx, block.Y+1+dy
-				if x < gridW && y < gridH {
-					grid[y][x] = ch
-					styleIdx[y][x] = blockIdx
-				}
-			}
-		}
-	}
 }
 
 // isDescendant checks if node is a descendant of ancestor

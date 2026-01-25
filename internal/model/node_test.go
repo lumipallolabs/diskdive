@@ -51,19 +51,3 @@ func TestSortBySize(t *testing.T) {
 	}
 }
 
-func TestSortByChange(t *testing.T) {
-	nodes := []*Node{
-		{Name: "shrunk", Size: 50, PrevSize: 100},
-		{Name: "grew", Size: 200, PrevSize: 100},
-		{Name: "same", Size: 100, PrevSize: 100},
-	}
-
-	SortByChange(nodes)
-
-	if nodes[0].Name != "grew" {
-		t.Errorf("expected 'grew' first, got %s", nodes[0].Name)
-	}
-	if nodes[2].Name != "shrunk" {
-		t.Errorf("expected 'shrunk' last, got %s", nodes[2].Name)
-	}
-}

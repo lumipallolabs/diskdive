@@ -2,25 +2,12 @@ package ui
 
 import (
 	"fmt"
-	"log"
-	"os"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/samuli/diskdive/internal/model"
 )
-
-var treeDebugLog *log.Logger
-
-func init() {
-	f, err := os.OpenFile("debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	treeDebugLog = log.New(f, "", log.Lmicroseconds)
-}
 
 const treeSizeBarWidth = 4 // Width of size proportion bar [████]
 
@@ -266,8 +253,18 @@ func (t TreePanel) RequiredWidth() int {
 	return maxWidth + 2
 }
 
-// buildLine creates the text content for a node (same logic as View)
-func (t TreePanel) buildLine(node *model.Node) string {
+// lineContent holds the components of a tree line for rendering
+type lineContent struct {
+	prefix      string
+	name        string
+	deletedBadge string
+	sizeBar     string
+	size        string
+	changeStr   string
+}
+
+// buildLineContent extracts the common line building logic
+func (t TreePanel) buildLineContent(node *model.Node) lineContent {
 	depth := t.getDepth(node)
 
 	prefix := strings.Repeat("  ", depth)
@@ -284,39 +281,69 @@ func (t TreePanel) buildLine(node *model.Node) string {
 	name := node.Name
 	size := FormatSize(node.TotalSize())
 
+	// For deleted items, skip size (will show as delta)
+	var deletedBadge string
+	if node.IsDeleted {
+		deletedBadge = " DEL"
+		size = ""
+	}
+
+	// Size bar for directories
 	var sizeBar string
 	if node.IsDir && node.Parent != nil && node.Parent.TotalSize() > 0 {
 		pct := float64(node.TotalSize()) / float64(node.Parent.TotalSize())
 		barW := treeSizeBarWidth
-		filled := int(pct * float64(barW))
-		sizeBar = "[" + strings.Repeat("\u2588", filled) + strings.Repeat("\u2591", barW-filled) + "]"
+		filledFloat := pct * float64(barW)
+		filled := int(filledFloat)
+		var bar strings.Builder
+		for j := 0; j < barW; j++ {
+			if j < filled {
+				bar.WriteRune('█')
+			} else if float64(j) < filledFloat+0.5 && filled < barW {
+				bar.WriteRune('▓')
+			} else {
+				bar.WriteRune('░')
+			}
+		}
+		sizeBar = "[" + bar.String() + "]"
 	}
 
+	// Change indicator
 	var changeStr string
 	if t.showDiff {
-		if node.IsNew {
-			changeStr = "NEW"
-		} else if change := node.SizeChange(); change != 0 {
-			if change > 0 {
-				changeStr = fmt.Sprintf("+%s", FormatSize(change))
-			} else {
-				changeStr = FormatSize(change)
-			}
+		if node.IsDeleted {
+			// Deleted item - show its full size as freed
+			changeStr = fmt.Sprintf("-%s", FormatSize(node.TotalSize()))
+		} else if node.DeletedSize > 0 {
+			// Contains deleted children - show accumulated freed size
+			changeStr = fmt.Sprintf("-%s", FormatSize(node.DeletedSize))
 		}
 	}
 
-	return fmt.Sprintf("%s%s %s %s %s", prefix, name, sizeBar, size, changeStr)
+	return lineContent{prefix, name, deletedBadge, sizeBar, size, changeStr}
+}
+
+// buildLine creates the text content for a node (for width calculation)
+// Must match the styling applied in View() for accurate width measurement
+func (t TreePanel) buildLine(node *model.Node) string {
+	c := t.buildLineContent(node)
+
+	// Apply same styling as View() for accurate width measurement
+	deletedBadge := c.deletedBadge
+	if node.IsDeleted && deletedBadge != "" {
+		deletedBadge = " " + DeletedBadge.Render("DEL")
+	}
+
+	changeStr := c.changeStr
+	if t.showDiff && changeStr != "" && node.IsDeleted {
+		// Deleted items show the freed size
+	}
+
+	return fmt.Sprintf("%s%s%s %s %s %s", c.prefix, c.name, deletedBadge, c.sizeBar, c.size, changeStr)
 }
 
 // View renders the tree
 func (t TreePanel) View() string {
-	start := time.Now()
-	defer func() {
-		if treeDebugLog != nil {
-			treeDebugLog.Printf("TreePanel.View: %v", time.Since(start))
-		}
-	}()
-
 	if t.root == nil {
 		return TreePanelStyle.Width(t.width).Height(t.height).Render("No data")
 	}
@@ -329,87 +356,43 @@ func (t TreePanel) View() string {
 
 	for i := t.offset; i < len(t.visible) && len(lines) < maxVisible; i++ {
 		node := t.visible[i]
-		depth := t.getDepth(node)
+		c := t.buildLineContent(node)
 
-		// Build prefix
-		prefix := strings.Repeat("  ", depth)
-		if node.IsDir {
-			if t.expanded[node.Path] {
-				prefix += "\u25bc " // down triangle
-			} else {
-				prefix += "\u25b6 " // right triangle
-			}
-		} else {
-			prefix += "  "
+		// Apply styles to components
+		deletedBadge := c.deletedBadge
+		if node.IsDeleted && deletedBadge != "" {
+			deletedBadge = " " + DeletedBadge.Render("DEL")
 		}
 
-		// Name and size
-		name := node.Name
-		size := FormatSize(node.TotalSize())
-
-		// Size bar for directories - gradient style
-		var sizeBar string
-		if node.IsDir && node.Parent != nil && node.Parent.TotalSize() > 0 {
-			pct := float64(node.TotalSize()) / float64(node.Parent.TotalSize())
-			barW := treeSizeBarWidth
-			filledFloat := pct * float64(barW)
-			filled := int(filledFloat)
-			// Gradient blocks: █ ▓ ▒ ░
-			var bar strings.Builder
-			for j := 0; j < barW; j++ {
-				if j < filled {
-					bar.WriteRune('█')
-				} else if float64(j) < filledFloat+0.5 && filled < barW {
-					bar.WriteRune('▓') // partial fill
-				} else {
-					bar.WriteRune('░')
-				}
-			}
-			sizeBar = "[" + bar.String() + "]"
-		}
-
-		// Change indicator
-		var changeStr string
-		if t.showDiff {
-			if node.IsNew {
-				changeStr = NewBadge.Render("NEW")
-			} else if change := node.SizeChange(); change != 0 {
-				if change > 0 {
-					changeStr = GrewStyle.Render(fmt.Sprintf("+%s", FormatSize(change)))
-				} else {
-					changeStr = ShrunkStyle.Render(FormatSize(change))
-				}
-			}
+		changeStr := c.changeStr
+		if t.showDiff && changeStr != "" {
+			// Style the size change indicator
+			changeStr = ShrunkStyle.Render(changeStr)
 		}
 
 		// Compose line
-		line := fmt.Sprintf("%s%s %s %s %s", prefix, name, sizeBar, size, changeStr)
+		line := fmt.Sprintf("%s%s%s %s %s %s", c.prefix, c.name, deletedBadge, c.sizeBar, c.size, changeStr)
 
-		// Determine color based on node type and diff state (matching treemap colors)
+		// Determine color based on node type and deletion state
 		var itemStyle lipgloss.Style
+		maxW := t.width - 2
 		if i == t.cursor && t.focused {
-			itemStyle = TreeItemSelected.Width(t.width - 2)
+			itemStyle = TreeItemSelected.Width(maxW).MaxWidth(maxW)
 		} else if i == t.cursor && !t.focused {
 			// Show dimmer selection when unfocused
-			itemStyle = TreeItemSelectedUnfocused.Width(t.width - 2)
-		} else if t.showDiff && node.IsNew {
-			// Entirely new item (yellow)
-			itemStyle = lipgloss.NewStyle().Foreground(ColorNew).Width(t.width - 2)
-		} else if t.showDiff && node.IsDir && node.HasGrew && node.HasShrunk {
-			// Folder has both additions and removals (purple/mixed)
-			itemStyle = lipgloss.NewStyle().Foreground(ColorMixed).Width(t.width - 2)
-		} else if t.showDiff && node.HasGrew {
-			// Item or folder grew / contains only additions (orange)
-			itemStyle = lipgloss.NewStyle().Foreground(ColorGrew).Width(t.width - 2)
-		} else if t.showDiff && node.HasShrunk {
-			// Item or folder shrunk / contains only removals (cyan)
-			itemStyle = lipgloss.NewStyle().Foreground(ColorShrunk).Width(t.width - 2)
+			itemStyle = TreeItemSelectedUnfocused.Width(maxW).MaxWidth(maxW)
+		} else if t.showDiff && node.IsDeleted {
+			// Deleted item - red
+			itemStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444")).MaxWidth(maxW)
+		} else if t.showDiff && node.DeletedSize > 0 {
+			// Contains deleted children - purple
+			itemStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#A855F7")).MaxWidth(maxW)
 		} else if node.IsDir {
 			// Directory: neon cyan
-			itemStyle = lipgloss.NewStyle().Foreground(ColorDir).Width(t.width - 2)
+			itemStyle = lipgloss.NewStyle().Foreground(ColorDir).MaxWidth(maxW)
 		} else {
 			// File: dimmer
-			itemStyle = lipgloss.NewStyle().Foreground(ColorFile).Width(t.width - 2)
+			itemStyle = lipgloss.NewStyle().Foreground(ColorFile).MaxWidth(maxW)
 		}
 		line = itemStyle.Render(line)
 

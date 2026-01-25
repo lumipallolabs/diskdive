@@ -3,34 +3,18 @@ package ui
 import (
 	"context"
 	"fmt"
-	"log"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/samuli/diskdive/internal/cache"
+	"github.com/samuli/diskdive/internal/logging"
 	"github.com/samuli/diskdive/internal/model"
 	"github.com/samuli/diskdive/internal/scanner"
+	"github.com/samuli/diskdive/internal/stats"
+	"github.com/samuli/diskdive/internal/watcher"
 )
-
-var debugLog *log.Logger
-
-func init() {
-	f, err := os.Create("debug.log")
-	if err != nil {
-		return
-	}
-	debugLog = log.New(f, "", log.Lmicroseconds)
-}
-
-func logTiming(name string, start time.Time) {
-	if debugLog != nil {
-		debugLog.Printf("%s: %v", name, time.Since(start))
-	}
-}
 
 // Panel identifies which panel is active
 type Panel int
@@ -40,28 +24,6 @@ const (
 	PanelTreemap
 )
 
-// SortMode defines how nodes are sorted
-type SortMode int
-
-const (
-	SortBySize SortMode = iota
-	SortByChange
-	SortByName
-)
-
-// String returns a human-readable name for the sort mode
-func (s SortMode) String() string {
-	switch s {
-	case SortBySize:
-		return "size"
-	case SortByChange:
-		return "change"
-	case SortByName:
-		return "name"
-	default:
-		return "unknown"
-	}
-}
 
 // scanStartMsg triggers the actual scan start (after UI has rendered)
 type scanStartMsg struct{}
@@ -82,37 +44,6 @@ type computeSizesDoneMsg struct {
 	root *model.Node
 }
 
-// loadCacheMsg triggers cache loading phase
-type loadCacheMsg struct {
-	root *model.Node
-}
-
-// loadCacheDoneMsg is sent when cache loading completes
-type loadCacheDoneMsg struct {
-	root *model.Node
-	prev *model.Node
-}
-
-// applyDiffMsg triggers diff computation phase
-type applyDiffMsg struct {
-	root *model.Node
-	prev *model.Node
-}
-
-// applyDiffDoneMsg is sent when diff computation completes
-type applyDiffDoneMsg struct {
-	root *model.Node
-}
-
-// saveCacheMsg triggers cache saving phase
-type saveCacheMsg struct {
-	root *model.Node
-}
-
-// saveCacheDoneMsg is sent when cache saving completes
-type saveCacheDoneMsg struct {
-	root *model.Node
-}
 
 // scanProgressMsg is sent during scanning
 type scanProgressMsg struct {
@@ -128,26 +59,45 @@ type focusDebounceMsg struct {
 // spinnerTickMsg triggers spinner animation
 type spinnerTickMsg struct{}
 
+// watcherEventMsg is sent when the filesystem watcher detects a change
+type watcherEventMsg struct {
+	event watcher.Event
+}
+
+// startWatcherMsg triggers starting the filesystem watcher
+type startWatcherMsg struct {
+	root string
+}
+
 // Spinner frames - cyberpunk style
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// Scan phases
+// Timing constants
+const (
+	spinnerTickInterval  = 80 * time.Millisecond
+	borderRotationSpeed  = 50  // milliseconds per frame
+	dotAnimationSpeed    = 400 // milliseconds per frame
+	focusDebounceTimeout = 300 * time.Millisecond
+)
+
+// Phase represents a scan phase with its display name
+type Phase struct {
+	id   int
+	name string
+}
+
+var phases = []Phase{
+	{0, "Scanning files"},
+	{1, "Computing sizes"},
+	{2, ""}, // phaseDone has no display name
+}
+
+// Phase IDs for easy reference
 const (
 	phaseScanning = iota
 	phaseComputingSizes
-	phaseLoadingCache
-	phaseComparingChanges
-	phaseSavingCache
 	phaseDone
 )
-
-var phaseNames = []string{
-	"Scanning files",
-	"Computing sizes",
-	"Loading cache",
-	"Comparing changes",
-	"Saving cache",
-}
 
 // App is the main application model
 type App struct {
@@ -160,18 +110,21 @@ type App struct {
 
 	// State
 	keys    KeyMap
-	cache   *cache.Cache
 	scanner scanner.Scanner
 
+	// Filesystem watcher and stats
+	watcher          *watcher.Watcher
+	statsManager     *stats.Manager
+	freedThisSession int64
+	freedLifetime    int64
+
 	// Data
-	drives   []model.Drive
-	root     *model.Node
-	prevRoot *model.Node
+	drives []model.Drive
+	root   *model.Node
 
 	// UI state
-	activePanel    Panel
-	sortMode       SortMode
-	showDiff       bool
+	activePanel Panel
+	showDiff    bool
 	scanning       bool
 	scanPhase      int    // current phase index (0-4)
 	scanFileCount  string // "1,234 files" from scanning
@@ -189,19 +142,26 @@ type App struct {
 func NewApp() App {
 	drives, _ := model.GetDrives()
 
+	// Initialize and load stats
+	statsMgr := stats.NewManager()
+	if err := statsMgr.Load(); err != nil {
+		logging.Debug.Printf("Failed to load stats: %v", err)
+	}
+
 	app := App{
 		header:        NewHeader(drives),
 		tree:          NewTreePanel(),
 		treemap:       NewTreemapPanel(),
 		help:          NewHelpOverlay(),
 		driveSelector: NewDriveSelector(drives),
-		keys:          DefaultKeyMap(),
-		cache:         cache.New(cache.DefaultDir()),
-		scanner:       scanner.NewWalker(8),
-		drives:        drives,
-		activePanel:   PanelTree,
-		sortMode:      SortBySize,
-		scanning:      len(drives) > 0, // Will start scanning on init
+		keys:    DefaultKeyMap(),
+		scanner: scanner.NewWalker(8),
+		statsManager:  statsMgr,
+		freedLifetime: statsMgr.FreedLifetime(),
+		drives:      drives,
+		activePanel: PanelTree,
+		showDiff:    true, // Show deleted items by default
+		scanning:    len(drives) > 0, // Will start scanning on init
 	}
 
 	app.tree.SetFocused(true)
@@ -211,6 +171,9 @@ func NewApp() App {
 	if len(drives) > 0 {
 		app.header.SetScanning(true, "")
 	}
+
+	// Update header with loaded stats
+	app.header.SetFreedStats(app.freedThisSession, app.freedLifetime)
 
 	return app
 }
@@ -234,17 +197,15 @@ func (a App) Init() tea.Cmd {
 func (a App) startScan(path string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		debugLog.Printf("[UI] Starting scan of %s", path)
+		logging.Debug.Printf("[UI] Starting scan of %s", path)
 		root, err := a.scanner.Scan(ctx, path)
-		debugLog.Printf("[UI] Scan completed, returning scanCompleteMsg (err=%v)", err)
+		logging.Debug.Printf("[UI] Scan completed, returning scanCompleteMsg (err=%v)", err)
 		return scanCompleteMsg{root: root, err: err}
 	}
 }
 
 // Update implements tea.Model
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	start := time.Now()
-	defer logTiming("Update", start)
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -262,7 +223,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.scanPhase = phaseScanning
 			a.scanFileCount = ""
 			a.scanBytesFound = ""
-			spinnerCmd := tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
+			spinnerCmd := tea.Tick(spinnerTickInterval, func(t time.Time) tea.Msg {
 				return spinnerTickMsg{}
 			})
 			return a, tea.Batch(a.startScan(a.drives[0].Path), spinnerCmd)
@@ -270,68 +231,34 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case scanCompleteMsg:
-		debugLog.Printf("[UI] Received scanCompleteMsg (err=%v)", msg.err)
+		logging.Debug.Printf("[UI] Received scanCompleteMsg (err=%v)", msg.err)
 		if msg.err != nil {
 			a.scanning = false
 			a.scanPhase = phaseDone
 			a.err = msg.err
 			a.header.SetScanning(false, "")
-			debugLog.Printf("[UI] Scan failed with error: %v", msg.err)
+			logging.Debug.Printf("[UI] Scan failed with error: %v", msg.err)
 			return a, nil
 		}
 		// Move to computing sizes phase
-		debugLog.Printf("[UI] Moving to computing sizes phase")
+		logging.Debug.Printf("[UI] Moving to computing sizes phase")
 		a.scanPhase = phaseComputingSizes
 		return a, func() tea.Msg {
 			return computeSizesMsg{root: msg.root}
 		}
 
 	case computeSizesMsg:
-		debugLog.Printf("[UI] Received computeSizesMsg")
+		logging.Debug.Printf("[UI] Received computeSizesMsg")
 		return a, func() tea.Msg {
 			start := time.Now()
-			debugLog.Printf("[PHASE] Starting ComputeSizes...")
+			logging.Debug.Printf("[PHASE] Starting ComputeSizes...")
 			msg.root.ComputeSizes()
-			debugLog.Printf("[PHASE] ComputeSizes took %v", time.Since(start))
+			logging.Debug.Printf("[PHASE] ComputeSizes took %v", time.Since(start))
 			return computeSizesDoneMsg{root: msg.root}
 		}
 
 	case computeSizesDoneMsg:
-		// Move to loading cache phase
-		a.scanPhase = phaseLoadingCache
-		return a, func() tea.Msg {
-			return loadCacheMsg{root: msg.root}
-		}
-
-	case loadCacheMsg:
-		return a, func() tea.Msg {
-			start := time.Now()
-			var prev *model.Node
-			if drive := a.header.Selected(); drive != nil {
-				prev, _ = a.cache.LoadLatest(drive.Letter)
-			}
-			debugLog.Printf("[PHASE] LoadCache took %v", time.Since(start))
-			return loadCacheDoneMsg{root: msg.root, prev: prev}
-		}
-
-	case loadCacheDoneMsg:
-		a.prevRoot = msg.prev
-		// Move to diff phase
-		a.scanPhase = phaseComparingChanges
-		return a, func() tea.Msg {
-			return applyDiffMsg{root: msg.root, prev: msg.prev}
-		}
-
-	case applyDiffMsg:
-		return a, func() tea.Msg {
-			start := time.Now()
-			cache.ApplyDiff(msg.root, msg.prev)
-			debugLog.Printf("[PHASE] ApplyDiff took %v", time.Since(start))
-			return applyDiffDoneMsg{root: msg.root}
-		}
-
-	case applyDiffDoneMsg:
-		debugLog.Printf("[UI] Diff complete, showing data to user (cache save in background)")
+		logging.Debug.Printf("[UI] Diff complete, showing data to user (cache save in background)")
 		// Show data immediately, save cache in background
 		a.scanning = false
 		a.scanPhase = phaseDone
@@ -346,17 +273,46 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Recalculate layout now that we have data (tree width depends on content)
 		a.updateLayout()
 
-		// Save cache in background (don't block UI)
-		go func() {
-			start := time.Now()
-			if drive := a.header.Selected(); drive != nil {
-				_ = a.cache.Save(drive.Letter, msg.root)
-			}
-			debugLog.Printf("[PHASE] SaveCache (background) took %v", time.Since(start))
-		}()
+		logging.Debug.Printf("[UI] UI ready, showing data")
 
-		debugLog.Printf("[UI] UI ready, showing data")
+		// Start filesystem watcher
+		if drive := a.header.Selected(); drive != nil {
+			return a, func() tea.Msg {
+				return startWatcherMsg{root: drive.Path}
+			}
+		}
 		return a, nil
+
+	case startWatcherMsg:
+		// Stop any existing watcher
+		if a.watcher != nil {
+			_ = a.watcher.Stop()
+		}
+
+		// Create and start new watcher
+		w, err := watcher.New()
+		if err != nil {
+			logging.Debug.Printf("Failed to create watcher: %v", err)
+			return a, nil
+		}
+
+		a.watcher = w
+		if err := w.AddRecursive(msg.root); err != nil {
+			logging.Debug.Printf("Failed to add recursive watch: %v", err)
+		}
+		w.Start()
+		logging.Debug.Printf("Filesystem watcher started for %s", msg.root)
+
+		// Start listening for watcher events
+		return a, a.listenForWatcherEvents()
+
+	case watcherEventMsg:
+		// Handle filesystem change
+		if msg.event.Type == watcher.EventDeleted {
+			a.handleDeletion(msg.event.Path)
+		}
+		// Continue listening for more events
+		return a, a.listenForWatcherEvents()
 
 	case scanProgressMsg:
 		a.scanFileCount = fmt.Sprintf("%d files", msg.progress.FilesScanned)
@@ -375,7 +331,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinnerTickMsg:
 		// Keep ticking while scanning to force UI redraws
 		if a.scanning || a.root == nil {
-			return a, tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
+			return a, tea.Tick(spinnerTickInterval, func(t time.Time) tea.Msg {
 				return spinnerTickMsg{}
 			})
 		}
@@ -417,6 +373,13 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case key.Matches(msg, a.keys.Quit):
+		// Clean up watcher and stats before quitting
+		if a.watcher != nil {
+			_ = a.watcher.Stop()
+		}
+		if a.statsManager != nil {
+			_ = a.statsManager.Close()
+		}
 		return a, tea.Quit
 
 	case key.Matches(msg, a.keys.Help):
@@ -541,10 +504,7 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.showDiff = !a.showDiff
 		a.tree.SetShowDiff(a.showDiff)
 		a.treemap.SetShowDiff(a.showDiff)
-		return a, nil
-
-	case key.Matches(msg, a.keys.CycleSort):
-		a.sortMode = (a.sortMode + 1) % 3
+		a.updateLayout()
 		return a, nil
 
 	case key.Matches(msg, a.keys.Rescan):
@@ -556,7 +516,9 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case key.Matches(msg, a.keys.OpenExplorer):
-		return a, a.openInExplorer()
+		logging.Debug.Printf("OpenExplorer key pressed")
+		cmd := a.openInExplorer()
+		return a, cmd
 	}
 
 	return a, nil
@@ -568,6 +530,16 @@ func (a *App) selectDrive(idx int) tea.Cmd {
 		return nil
 	}
 
+	// Stop existing watcher
+	if a.watcher != nil {
+		_ = a.watcher.Stop()
+		a.watcher = nil
+	}
+
+	// Reset session freed counter for new scan
+	a.freedThisSession = 0
+	a.header.SetFreedStats(a.freedThisSession, a.freedLifetime)
+
 	a.header.SetSelected(idx)
 	a.scanning = true
 	a.scanPhase = phaseScanning
@@ -575,7 +547,6 @@ func (a *App) selectDrive(idx int) tea.Cmd {
 	a.scanBytesFound = ""
 	a.header.SetScanning(true, "")
 	a.root = nil
-	a.prevRoot = nil
 	a.tree.SetRoot(nil)
 	a.treemap.SetRoot(nil)
 
@@ -583,7 +554,7 @@ func (a *App) selectDrive(idx int) tea.Cmd {
 	a.scanner = scanner.NewWalker(8)
 
 	// Start scan and spinner
-	spinnerCmd := tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
+	spinnerCmd := tea.Tick(spinnerTickInterval, func(t time.Time) tea.Msg {
 		return spinnerTickMsg{}
 	})
 	return tea.Batch(a.startScan(a.drives[idx].Path), spinnerCmd)
@@ -601,7 +572,7 @@ func (a *App) syncSelection() tea.Cmd {
 	if node.IsDir && len(node.Children) > 0 {
 		a.focusVersion++
 		version := a.focusVersion
-		return tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg {
+		return tea.Tick(focusDebounceTimeout, func(t time.Time) tea.Msg {
 			return focusDebounceMsg{version: version, node: node}
 		})
 	}
@@ -614,10 +585,81 @@ func (a *App) syncSelectionFromTreemap() {
 	// as that could be jarring. The treemap shows what's selected.
 }
 
+// listenForWatcherEvents returns a command that waits for the next watcher event
+func (a *App) listenForWatcherEvents() tea.Cmd {
+	if a.watcher == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		event, ok := <-a.watcher.Events()
+		if !ok {
+			return nil // Channel closed
+		}
+		return watcherEventMsg{event: event}
+	}
+}
+
+// handleDeletion handles a file/directory deletion event
+func (a *App) handleDeletion(path string) {
+	if a.root == nil {
+		return
+	}
+
+	// Find the node by path
+	node := a.findNodeByPath(a.root, path)
+	if node == nil {
+		logging.Debug.Printf("Watcher: DELETE event for path not in tree: %s", path)
+		return
+	}
+
+	// Already marked as deleted
+	if node.IsDeleted {
+		return
+	}
+
+	// Get size before marking as deleted
+	size := node.TotalSize()
+
+	// Mark as deleted (also propagates to ancestors)
+	node.MarkDeleted()
+	logging.Debug.Printf("Watcher: MARKED DELETED: %s (size: %d)", path, size)
+
+	// Update freed counters
+	a.freedThisSession += size
+	a.freedLifetime += size
+
+	// Update stats manager (will debounce saves)
+	if a.statsManager != nil {
+		a.statsManager.AddFreed(size)
+	}
+
+	// Update header display
+	a.header.SetFreedStats(a.freedThisSession, a.freedLifetime)
+
+	logging.Debug.Printf("Watcher: marked %s as deleted, freed %d bytes", path, size)
+}
+
+// findNodeByPath searches for a node by its path
+func (a *App) findNodeByPath(node *model.Node, path string) *model.Node {
+	if node.Path == path {
+		return node
+	}
+
+	for _, child := range node.Children {
+		if found := a.findNodeByPath(child, path); found != nil {
+			return found
+		}
+	}
+
+	return nil
+}
+
 // openInExplorer opens the selected directory in the system file manager
 func (a *App) openInExplorer() tea.Cmd {
 	node := a.tree.Selected()
 	if node == nil {
+		logging.Debug.Printf("openInExplorer: no node selected")
 		return nil
 	}
 
@@ -627,8 +669,11 @@ func (a *App) openInExplorer() tea.Cmd {
 		path = node.Parent.Path
 	}
 
+	logging.Debug.Printf("openInExplorer: opening %s", path)
 	// Open in file manager (platform-specific implementation)
-	_ = openInFileManager(path)
+	if err := openInFileManager(path); err != nil {
+		logging.Debug.Printf("openInExplorer: error: %v", err)
+	}
 	return nil
 }
 
@@ -695,7 +740,7 @@ func renderSpinningBorder(content string, width, height int, t time.Time) string
 	perimeter := 2*innerW + 2*innerH + 4 // +4 for corners
 
 	// Time-based offset for spinning effect (reverse direction)
-	offset := int(t.UnixMilli()/50) % perimeter
+	offset := int(t.UnixMilli()/borderRotationSpeed) % perimeter
 
 	// Helper to get color at position
 	getColor := func(pos int) lipgloss.Style {
@@ -773,8 +818,6 @@ func renderSpinningBorder(content string, width, height int, t time.Time) string
 
 // View implements tea.Model
 func (a App) View() string {
-	start := time.Now()
-	defer logTiming("App.View", start)
 
 	if a.width == 0 || a.height == 0 {
 		if a.scanning {
@@ -808,39 +851,39 @@ func (a App) View() string {
 		var logLines []string
 
 		// Styles for different states
-		doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#39FF14")) // neon green
+		doneStyle := lipgloss.NewStyle().Foreground(ColorSuccess)
 		activeStyle := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true)
 
 		// Time-based spinner
-		spinnerIdx := int(time.Now().UnixMilli()/80) % len(spinnerFrames)
+		spinnerIdx := int(time.Now().UnixMilli()/int64(spinnerTickInterval.Milliseconds())) % len(spinnerFrames)
 		spinner := spinnerFrames[spinnerIdx]
 
 		// Only show phases up to and including current (boot-style log)
-		for i, name := range phaseNames {
-			if i > a.scanPhase {
-				break // Don't show future phases
+		for _, phase := range phases {
+			if phase.name == "" || phase.id > a.scanPhase {
+				break // Don't show future phases or unnamed phases
 			}
 			var line string
-			if i < a.scanPhase {
+			if phase.id < a.scanPhase {
 				// Completed phase
 				check := doneStyle.Render("✓")
-				text := doneStyle.Render(name)
+				text := doneStyle.Render(phase.name)
 				// Add stats for scanning phase
-				if i == phaseScanning && a.scanFileCount != "" {
+				if phase.id == phaseScanning && a.scanFileCount != "" {
 					stats := doneStyle.Render(fmt.Sprintf(" · %s · %s", a.scanFileCount, a.scanBytesFound))
 					line = fmt.Sprintf("  %s %s%s", check, text, stats)
 				} else {
 					line = fmt.Sprintf("  %s %s", check, text)
 				}
 			} else {
-				// Current phase (i == a.scanPhase)
+				// Current phase (phase.id == a.scanPhase)
 				spin := activeStyle.Render(spinner)
-				text := activeStyle.Render(name)
+				text := activeStyle.Render(phase.name)
 				// Animated dots (cycle through ., .., ...)
-				dotCount := (int(time.Now().UnixMilli()/400) % 3) + 1
+				dotCount := (int(time.Now().UnixMilli()/dotAnimationSpeed) % 3) + 1
 				dots := activeStyle.Render(strings.Repeat(".", dotCount))
 				// Add live stats for scanning phase
-				if i == phaseScanning && a.scanFileCount != "" {
+				if phase.id == phaseScanning && a.scanFileCount != "" {
 					stats := activeStyle.Render(fmt.Sprintf(" · %s · %s", a.scanFileCount, a.scanBytesFound))
 					line = fmt.Sprintf("  %s %s%s%s", spin, text, dots, stats)
 				} else {
@@ -851,7 +894,7 @@ func (a App) View() string {
 		}
 
 		// Pad with empty lines at top to keep panel height constant (5 phases)
-		totalLines := len(phaseNames)
+		totalLines := phaseDone // Number of displayable phases
 		for len(logLines) < totalLines {
 			logLines = append([]string{""}, logLines...)
 		}
@@ -898,7 +941,7 @@ func (a App) View() string {
 			lipgloss.Center, lipgloss.Center,
 			overlay,
 			lipgloss.WithWhitespaceChars(" "),
-			lipgloss.WithWhitespaceForeground(lipgloss.Color("#1F1F23")),
+			lipgloss.WithWhitespaceForeground(ColorBackground),
 		)
 	}
 
@@ -910,7 +953,7 @@ func (a App) View() string {
 			lipgloss.Center, lipgloss.Center,
 			overlay,
 			lipgloss.WithWhitespaceChars(" "),
-			lipgloss.WithWhitespaceForeground(lipgloss.Color("#1F1F23")),
+			lipgloss.WithWhitespaceForeground(ColorBackground),
 		)
 	}
 

@@ -12,11 +12,28 @@ type Node struct {
 	Parent   *Node   `json:"-"` // skip to avoid circular reference
 
 	// Change tracking (not persisted)
-	PrevSize   int64 `json:"-"`
-	IsNew      bool  `json:"-"`
-	IsDeleted  bool  `json:"-"`
-	HasGrew    bool  `json:"-"` // this node or descendant grew/is new
-	HasShrunk  bool  `json:"-"` // this node or descendant shrunk/deleted
+	PrevSize    int64 `json:"-"`
+	IsNew       bool  `json:"-"`
+	IsDeleted   bool  `json:"-"`
+	HasGrew     bool  `json:"-"` // this node or descendant grew/is new
+	HasShrunk   bool  `json:"-"` // this node or descendant shrunk/deleted
+	DeletedSize int64 `json:"-"` // total size of deleted items in this subtree
+}
+
+// MarkDeleted marks this node as deleted and propagates the size change up the tree
+func (n *Node) MarkDeleted() {
+	if n.IsDeleted {
+		return // Already marked
+	}
+
+	size := n.TotalSize()
+	n.IsDeleted = true
+	n.DeletedSize = size
+
+	// Propagate up to ancestors
+	for parent := n.Parent; parent != nil; parent = parent.Parent {
+		parent.DeletedSize += size
+	}
 }
 
 // TotalSize returns the cached total size (call ComputeSizes first)
