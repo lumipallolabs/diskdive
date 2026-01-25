@@ -3,6 +3,9 @@ package ui
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,6 +14,22 @@ import (
 	"github.com/samuli/diskdive/internal/model"
 	"github.com/samuli/diskdive/internal/scanner"
 )
+
+var debugLog *log.Logger
+
+func init() {
+	f, err := os.Create("debug.log")
+	if err != nil {
+		return
+	}
+	debugLog = log.New(f, "", log.Lmicroseconds)
+}
+
+func logTiming(name string, start time.Time) {
+	if debugLog != nil {
+		debugLog.Printf("%s: %v", name, time.Since(start))
+	}
+}
 
 // Panel identifies which panel is active
 type Panel int
@@ -57,6 +76,12 @@ type scanProgressMsg struct {
 	progress scanner.Progress
 }
 
+// focusDebounceMsg triggers a debounced treemap focus update
+type focusDebounceMsg struct {
+	version int
+	node    *model.Node
+}
+
 // App is the main application model
 type App struct {
 	// Components
@@ -77,11 +102,12 @@ type App struct {
 	prevRoot *model.Node
 
 	// UI state
-	activePanel Panel
-	sortMode    SortMode
-	showDiff    bool
-	scanning    bool
-	err         error
+	activePanel  Panel
+	sortMode     SortMode
+	showDiff     bool
+	scanning     bool
+	err          error
+	focusVersion int // incremented on each selection, used for debouncing
 
 	// Dimensions
 	width  int
@@ -141,6 +167,9 @@ func (a App) startScan(path string) tea.Cmd {
 
 // Update implements tea.Model
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	start := time.Now()
+	defer logTiming("Update", start)
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
@@ -196,6 +225,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.progress.FilesScanned,
 			FormatSize(msg.progress.BytesFound))
 		a.header.SetScanning(true, progress)
+		return a, nil
+
+	case focusDebounceMsg:
+		// Only apply focus if this is still the latest version (user stopped scrolling)
+		if msg.version == a.focusVersion && msg.node != nil {
+			a.treemap.SetFocus(msg.node)
+		}
 		return a, nil
 	}
 
@@ -256,14 +292,14 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.activePanel = PanelTree
 			a.tree.SetFocused(true)
 			a.treemap.SetFocused(false)
-			a.syncSelection()
+			return a, a.syncSelection()
 		}
 		return a, nil
 
 	case key.Matches(msg, a.keys.Up):
 		if a.activePanel == PanelTree {
 			a.tree.MoveUp()
-			a.syncSelection()
+			return a, a.syncSelection()
 		} else {
 			a.treemap.MoveToBlock(0, -1)
 			a.syncSelectionFromTreemap()
@@ -273,7 +309,7 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, a.keys.Down):
 		if a.activePanel == PanelTree {
 			a.tree.MoveDown()
-			a.syncSelection()
+			return a, a.syncSelection()
 		} else {
 			a.treemap.MoveToBlock(0, 1)
 			a.syncSelectionFromTreemap()
@@ -303,14 +339,28 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, a.keys.Top):
 		if a.activePanel == PanelTree {
 			a.tree.GoToTop()
-			a.syncSelection()
+			return a, a.syncSelection()
 		}
 		return a, nil
 
 	case key.Matches(msg, a.keys.Bottom):
 		if a.activePanel == PanelTree {
 			a.tree.GoToBottom()
-			a.syncSelection()
+			return a, a.syncSelection()
+		}
+		return a, nil
+
+	case key.Matches(msg, a.keys.PageUp):
+		if a.activePanel == PanelTree {
+			a.tree.PageUp()
+			return a, a.syncSelection()
+		}
+		return a, nil
+
+	case key.Matches(msg, a.keys.PageDown):
+		if a.activePanel == PanelTree {
+			a.tree.PageDown()
+			return a, a.syncSelection()
 		}
 		return a, nil
 
@@ -320,8 +370,8 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			// Toggle expand/collapse in tree view
 			a.tree.Toggle()
-			a.syncSelection()
 			a.updateLayout()
+			return a, a.syncSelection()
 		}
 		return a, nil
 
@@ -378,14 +428,22 @@ func (a *App) selectDrive(idx int) tea.Cmd {
 }
 
 // syncSelection syncs the tree selection to the treemap
-func (a *App) syncSelection() {
-	if node := a.tree.Selected(); node != nil {
-		a.treemap.SetSelected(node)
-		// If a directory is selected, focus treemap on it to show its contents
-		if node.IsDir && len(node.Children) > 0 {
-			a.treemap.SetFocus(node)
-		}
+func (a *App) syncSelection() tea.Cmd {
+	node := a.tree.Selected()
+	if node == nil {
+		return nil
 	}
+	a.treemap.SetSelected(node)
+
+	// Schedule debounced focus update for directories
+	if node.IsDir && len(node.Children) > 0 {
+		a.focusVersion++
+		version := a.focusVersion
+		return tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg {
+			return focusDebounceMsg{version: version, node: node}
+		})
+	}
+	return nil
 }
 
 // syncSelectionFromTreemap syncs treemap selection to tree
@@ -428,6 +486,9 @@ func (a *App) updateLayout() {
 
 // View implements tea.Model
 func (a App) View() string {
+	start := time.Now()
+	defer logTiming("App.View", start)
+
 	if a.width == 0 || a.height == 0 {
 		if a.scanning {
 			return "Scanning drive..."

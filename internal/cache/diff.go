@@ -6,6 +6,7 @@ import "github.com/samuli/diskdive/internal/model"
 func ApplyDiff(current, previous *model.Node) {
 	if previous == nil {
 		markAllNew(current)
+		propagateChanges(current)
 		return
 	}
 
@@ -15,6 +16,9 @@ func ApplyDiff(current, previous *model.Node) {
 
 	// Apply diff info to current tree
 	applyDiffRecursive(current, prevMap)
+
+	// Propagate HasGrew/HasShrunk flags up the tree
+	propagateChanges(current)
 }
 
 func buildPathMap(node *model.Node, m map[string]*model.Node) {
@@ -44,4 +48,29 @@ func markAllNew(node *model.Node) {
 	for _, child := range node.Children {
 		markAllNew(child)
 	}
+}
+
+// propagateChanges sets HasGrew/HasShrunk on nodes based on their own state
+// and their descendants' states. Returns (hasGrew, hasShrunk).
+func propagateChanges(node *model.Node) (bool, bool) {
+	// Check if this node itself grew or shrunk
+	ownGrew := node.IsNew || node.SizeChange() > 0
+	ownShrunk := node.IsDeleted || node.SizeChange() < 0
+
+	// Aggregate from children
+	childGrew := false
+	childShrunk := false
+	for _, child := range node.Children {
+		g, s := propagateChanges(child)
+		if g {
+			childGrew = true
+		}
+		if s {
+			childShrunk = true
+		}
+	}
+
+	node.HasGrew = ownGrew || childGrew
+	node.HasShrunk = ownShrunk || childShrunk
+	return node.HasGrew, node.HasShrunk
 }

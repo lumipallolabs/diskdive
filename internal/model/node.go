@@ -2,17 +2,19 @@ package model
 
 // Node represents a file or directory in the scanned tree
 type Node struct {
-	Path     string
-	Name     string
-	Size     int64 // size in bytes (cached total for dirs, direct size for files)
-	IsDir    bool
-	Children []*Node
-	Parent   *Node
+	Path     string  `json:"path"`
+	Name     string  `json:"name"`
+	Size     int64   `json:"size"` // size in bytes (cached total for dirs, direct size for files)
+	IsDir    bool    `json:"isDir"`
+	Children []*Node `json:"children,omitempty"`
+	Parent   *Node   `json:"-"` // skip to avoid circular reference
 
-	// Change tracking
-	PrevSize  int64 // from cache, 0 if new
-	IsNew     bool  // didn't exist in previous scan
-	IsDeleted bool  // only appears in diff view
+	// Change tracking (not persisted)
+	PrevSize   int64 `json:"-"`
+	IsNew      bool  `json:"-"`
+	IsDeleted  bool  `json:"-"`
+	HasGrew    bool  `json:"-"` // this node or descendant grew/is new
+	HasShrunk  bool  `json:"-"` // this node or descendant shrunk/deleted
 }
 
 // TotalSize returns the cached total size (call ComputeSizes first)
@@ -45,4 +47,50 @@ func (n *Node) ChangePercent() float64 {
 		return 0
 	}
 	return float64(n.SizeChange()) / float64(n.PrevSize) * 100
+}
+
+// RebuildParentLinks restores Parent pointers after loading from cache
+func (n *Node) RebuildParentLinks() {
+	for _, child := range n.Children {
+		child.Parent = n
+		child.RebuildParentLinks()
+	}
+}
+
+// CacheNode is a serializable version of Node (no Parent pointer)
+type CacheNode struct {
+	Path     string
+	Name     string
+	Size     int64
+	IsDir    bool
+	Children []*CacheNode
+}
+
+// ToCacheNode converts a Node tree to a CacheNode tree for serialization
+func (n *Node) ToCacheNode() *CacheNode {
+	cn := &CacheNode{
+		Path:  n.Path,
+		Name:  n.Name,
+		Size:  n.Size,
+		IsDir: n.IsDir,
+	}
+	for _, child := range n.Children {
+		cn.Children = append(cn.Children, child.ToCacheNode())
+	}
+	return cn
+}
+
+// ToNode converts a CacheNode tree back to a Node tree
+func (cn *CacheNode) ToNode(parent *Node) *Node {
+	n := &Node{
+		Path:   cn.Path,
+		Name:   cn.Name,
+		Size:   cn.Size,
+		IsDir:  cn.IsDir,
+		Parent: parent,
+	}
+	for _, child := range cn.Children {
+		n.Children = append(n.Children, child.ToNode(n))
+	}
+	return n
 }

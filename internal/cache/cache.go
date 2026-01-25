@@ -1,7 +1,8 @@
 package cache
 
 import (
-	"encoding/json"
+	"compress/gzip"
+	"encoding/gob"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,19 +38,27 @@ func (c *Cache) Save(driveLetter string, root *model.Node) error {
 		return fmt.Errorf("create cache dir: %w", err)
 	}
 
-	filename := fmt.Sprintf("%s_%s.json",
+	filename := fmt.Sprintf("%s_%s.gob.gz",
 		driveLetter,
 		time.Now().Format("2006-01-02_150405"))
 
 	path := filepath.Join(c.dir, filename)
 
-	data, err := json.MarshalIndent(root, "", "  ")
+	file, err := os.Create(path)
 	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
+		return fmt.Errorf("create file: %w", err)
 	}
+	defer file.Close()
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("write: %w", err)
+	gzWriter := gzip.NewWriter(file)
+	defer gzWriter.Close()
+
+	// Convert to CacheNode to avoid circular references
+	cacheNode := root.ToCacheNode()
+
+	encoder := gob.NewEncoder(gzWriter)
+	if err := encoder.Encode(cacheNode); err != nil {
+		return fmt.Errorf("encode: %w", err)
 	}
 
 	return nil
@@ -57,7 +66,7 @@ func (c *Cache) Save(driveLetter string, root *model.Node) error {
 
 // LoadLatest loads the most recent cache for a drive
 func (c *Cache) LoadLatest(driveLetter string) (*model.Node, error) {
-	pattern := filepath.Join(c.dir, fmt.Sprintf("%s_*.json", driveLetter))
+	pattern := filepath.Join(c.dir, fmt.Sprintf("%s_*.gob.gz", driveLetter))
 	files, err := filepath.Glob(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("glob: %w", err)
@@ -71,22 +80,31 @@ func (c *Cache) LoadLatest(driveLetter string) (*model.Node, error) {
 	sort.Strings(files)
 	latest := files[len(files)-1]
 
-	data, err := os.ReadFile(latest)
+	file, err := os.Open(latest)
 	if err != nil {
-		return nil, fmt.Errorf("read: %w", err)
+		return nil, fmt.Errorf("open: %w", err)
+	}
+	defer file.Close()
+
+	gzReader, err := gzip.NewReader(file)
+	if err != nil {
+		return nil, fmt.Errorf("gzip reader: %w", err)
+	}
+	defer gzReader.Close()
+
+	var cacheNode model.CacheNode
+	decoder := gob.NewDecoder(gzReader)
+	if err := decoder.Decode(&cacheNode); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
 	}
 
-	var root model.Node
-	if err := json.Unmarshal(data, &root); err != nil {
-		return nil, fmt.Errorf("unmarshal: %w", err)
-	}
-
-	return &root, nil
+	// Convert back to Node (this also sets Parent links)
+	return cacheNode.ToNode(nil), nil
 }
 
 // Timestamp returns the timestamp of the latest cache
 func (c *Cache) Timestamp(driveLetter string) (time.Time, error) {
-	pattern := filepath.Join(c.dir, fmt.Sprintf("%s_*.json", driveLetter))
+	pattern := filepath.Join(c.dir, fmt.Sprintf("%s_*.gob.gz", driveLetter))
 	files, _ := filepath.Glob(pattern)
 	if len(files) == 0 {
 		return time.Time{}, fmt.Errorf("no cache")
@@ -97,7 +115,7 @@ func (c *Cache) Timestamp(driveLetter string) (time.Time, error) {
 
 	// Extract timestamp from filename
 	base := filepath.Base(latest)
-	base = strings.TrimSuffix(base, ".json")
+	base = strings.TrimSuffix(base, ".gob.gz")
 	parts := strings.SplitN(base, "_", 2)
 	if len(parts) != 2 {
 		return time.Time{}, fmt.Errorf("invalid filename")

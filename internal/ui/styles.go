@@ -16,13 +16,15 @@ var (
 	ColorMuted     = lipgloss.Color("#6B7280")
 	ColorBorder    = lipgloss.Color("#3F3F46")
 
-	// Change colors
-	ColorGrew      = lipgloss.Color("#FCA5A5") // light red
-	ColorGrewBg    = lipgloss.Color("#7F1D1D") // dark red bg
-	ColorShrunk    = lipgloss.Color("#86EFAC") // light green
-	ColorShrunkBg  = lipgloss.Color("#14532D") // dark green bg
-	ColorNew       = lipgloss.Color("#FDE047") // yellow
-	ColorUnchanged = lipgloss.Color("#9CA3AF") // gray
+	// Change colors (warm/cool palette - colorblind friendly)
+	ColorGrew       = lipgloss.Color("#FDBA74") // light orange - growth
+	ColorGrewBg     = lipgloss.Color("#7C2D12") // dark orange bg
+	ColorShrunk     = lipgloss.Color("#5EEAD4") // teal - shrinkage (distinct from directory blue)
+	ColorShrunkBg   = lipgloss.Color("#115E59") // dark teal bg
+	ColorNew        = lipgloss.Color("#FDE047") // yellow
+	ColorUnchanged  = lipgloss.Color("#9CA3AF") // gray
+	ColorMixed      = lipgloss.Color("#E9D5FF") // light purple - folder has both grew and shrunk
+	ColorMixedBg    = lipgloss.Color("#4C1D95") // dark purple bg
 )
 
 // Styles

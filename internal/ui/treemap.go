@@ -2,14 +2,27 @@ package ui
 
 import (
 	"fmt"
+	"log"
 	"math"
+	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jeffwilliams/squarify"
 	"github.com/samuli/diskdive/internal/model"
 )
+
+var treemapDebugLog *log.Logger
+
+func init() {
+	f, err := os.OpenFile("debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	treemapDebugLog = log.New(f, "", log.Lmicroseconds)
+}
 
 // Block represents a rectangle in the treemap
 type Block struct {
@@ -32,6 +45,14 @@ type TreemapPanel struct {
 	height   int
 	focused  bool
 	showDiff bool
+
+	// Render cache
+	cachedView     string
+	cacheValid     bool
+	cachedFocus    *model.Node
+	cachedSelected *model.Node
+	cachedFocused  bool
+	cachedShowDiff bool
 }
 
 // NewTreemapPanel creates a new treemap panel
@@ -49,9 +70,12 @@ func (t *TreemapPanel) SetRoot(root *model.Node) {
 
 // SetSize sets the panel dimensions
 func (t *TreemapPanel) SetSize(w, h int) {
-	t.width = w
-	t.height = h
-	t.layout()
+	if t.width != w || t.height != h {
+		t.width = w
+		t.height = h
+		t.cacheValid = false
+		t.layout()
+	}
 }
 
 // SetFocused sets focus state
@@ -218,7 +242,15 @@ const (
 
 // layout calculates block positions using the squarify library
 func (t *TreemapPanel) layout() {
+	start := time.Now()
+	defer func() {
+		if treemapDebugLog != nil {
+			treemapDebugLog.Printf("TreemapPanel.layout: %v", time.Since(start))
+		}
+	}()
+
 	t.blocks = nil
+	t.cacheValid = false // Invalidate render cache
 
 	if t.focus == nil || t.width <= 2 || t.height <= 2 {
 		return
@@ -478,9 +510,25 @@ func (t *TreemapPanel) layout() {
 }
 
 // View renders the treemap
-func (t TreemapPanel) View() string {
+func (t *TreemapPanel) View() string {
+	start := time.Now()
+	defer func() {
+		if treemapDebugLog != nil {
+			treemapDebugLog.Printf("TreemapPanel.View: %v (cached=%v)", time.Since(start), t.cacheValid)
+		}
+	}()
+
 	if t.focus == nil {
 		return TreemapPanelStyle.Render("No data")
+	}
+
+	// Check if cache is valid
+	if t.cacheValid &&
+		t.cachedFocus == t.focus &&
+		t.cachedSelected == t.selected &&
+		t.cachedFocused == t.focused &&
+		t.cachedShowDiff == t.showDiff {
+		return t.cachedView
 	}
 
 	// Content dimensions (accounting for border and padding)
@@ -493,17 +541,20 @@ func (t TreemapPanel) View() string {
 		contentH = 1
 	}
 
-	// Create a 2D grid
+	// Create a 2D grid with style indices instead of full styles
 	grid := make([][]rune, contentH)
-	colors := make([][]lipgloss.Style, contentH)
+	styleIdx := make([][]int, contentH)
 	for i := range grid {
 		grid[i] = make([]rune, contentW)
-		colors[i] = make([]lipgloss.Style, contentW)
+		styleIdx[i] = make([]int, contentW)
 		for j := range grid[i] {
 			grid[i][j] = ' '
-			colors[i][j] = lipgloss.NewStyle()
+			styleIdx[i][j] = 0 // 0 = empty/default
 		}
 	}
+
+	// Collect styles used - index 0 is reserved for empty
+	styles := []lipgloss.Style{lipgloss.NewStyle()}
 
 	// Draw blocks (with bounds validation)
 	for _, block := range t.blocks {
@@ -514,15 +565,23 @@ func (t TreemapPanel) View() string {
 			// Skip invalid blocks
 			continue
 		}
-		t.drawBlock(grid, colors, block, contentW, contentH)
+		t.drawBlockIndexed(grid, styleIdx, &styles, block, contentW, contentH)
 	}
 
-	// Render grid to string
+	// Render grid to string - batch by style index
 	var lines []string
 	for y := 0; y < contentH; y++ {
 		var line strings.Builder
-		for x := 0; x < contentW; x++ {
-			line.WriteString(colors[y][x].Render(string(grid[y][x])))
+		x := 0
+		for x < contentW {
+			// Find run of cells with same style index
+			currentIdx := styleIdx[y][x]
+			var run strings.Builder
+			for x < contentW && styleIdx[y][x] == currentIdx {
+				run.WriteRune(grid[y][x])
+				x++
+			}
+			line.WriteString(styles[currentIdx].Render(run.String()))
 		}
 		lines = append(lines, line.String())
 	}
@@ -540,7 +599,15 @@ func (t TreemapPanel) View() string {
 		style = style.BorderForeground(ColorPrimary)
 	}
 
-	return style.Render(content)
+	// Cache the result
+	t.cachedView = style.Render(content)
+	t.cacheValid = true
+	t.cachedFocus = t.focus
+	t.cachedSelected = t.selected
+	t.cachedFocused = t.focused
+	t.cachedShowDiff = t.showDiff
+
+	return t.cachedView
 }
 
 // drawBlock draws a single block onto the grid
@@ -559,12 +626,19 @@ func (t TreemapPanel) drawBlock(grid [][]rune, colors [][]lipgloss.Style, block 
 		fgColor = lipgloss.Color("#9CA3AF")
 	} else if t.showDiff && block.Node != nil {
 		if block.Node.IsNew {
+			// Entirely new item (yellow)
 			bgColor = ColorNew
 			fgColor = lipgloss.Color("#000000")
-		} else if change := block.Node.SizeChange(); change > 0 {
+		} else if block.Node.IsDir && block.Node.HasGrew && block.Node.HasShrunk {
+			// Folder has both additions and removals (purple/mixed)
+			bgColor = ColorMixedBg
+			fgColor = ColorMixed
+		} else if block.Node.HasGrew {
+			// Item or folder grew / contains only additions (orange)
 			bgColor = ColorGrewBg
 			fgColor = ColorGrew
-		} else if change < 0 {
+		} else if block.Node.HasShrunk {
+			// Item or folder shrunk / contains only removals (cyan)
 			bgColor = ColorShrunkBg
 			fgColor = ColorShrunk
 		} else {
@@ -693,6 +767,162 @@ func (t TreemapPanel) drawBlock(grid [][]rune, colors [][]lipgloss.Style, block 
 				if x < gridW && y < gridH {
 					grid[y][x] = ch
 					colors[y][x] = blockStyle
+				}
+			}
+		}
+	}
+}
+
+// drawBlockIndexed draws a single block using style indices for efficient batching
+func (t TreemapPanel) drawBlockIndexed(grid [][]rune, styleIdx [][]int, styles *[]lipgloss.Style, block Block, gridW, gridH int) {
+	if block.Width < 1 || block.Height < 1 {
+		return
+	}
+
+	// Determine block color
+	var bgColor lipgloss.Color
+	var fgColor lipgloss.Color
+
+	if block.IsGrouped {
+		bgColor = lipgloss.Color("#3D3D3D")
+		fgColor = lipgloss.Color("#9CA3AF")
+	} else if t.showDiff && block.Node != nil {
+		if block.Node.IsNew {
+			bgColor = ColorNew
+			fgColor = lipgloss.Color("#000000")
+		} else if block.Node.IsDir && block.Node.HasGrew && block.Node.HasShrunk {
+			bgColor = ColorMixedBg
+			fgColor = ColorMixed
+		} else if block.Node.HasGrew {
+			bgColor = ColorGrewBg
+			fgColor = ColorGrew
+		} else if block.Node.HasShrunk {
+			bgColor = ColorShrunkBg
+			fgColor = ColorShrunk
+		} else {
+			bgColor = lipgloss.Color("#2D2D2D")
+			fgColor = lipgloss.Color("#9CA3AF")
+		}
+	} else {
+		if block.Node != nil && block.Node.IsDir {
+			bgColor = lipgloss.Color("#1E3A5F")
+			fgColor = lipgloss.Color("#7DD3FC")
+		} else {
+			bgColor = lipgloss.Color("#2D2D2D")
+			fgColor = lipgloss.Color("#E4E4E7")
+		}
+	}
+
+	isSelected := block.Node == t.selected && t.focused
+
+	// Create styles and get their indices
+	blockStyle := lipgloss.NewStyle().Background(bgColor).Foreground(fgColor)
+	if isSelected {
+		blockStyle = blockStyle.Background(ColorPrimary).Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+	}
+	blockIdx := len(*styles)
+	*styles = append(*styles, blockStyle)
+
+	borderStyle := lipgloss.NewStyle().Background(bgColor).Foreground(lipgloss.Color("#4B5563"))
+	if isSelected {
+		borderStyle = borderStyle.Background(ColorPrimary).Foreground(lipgloss.Color("#FFFFFF"))
+	}
+	borderIdx := len(*styles)
+	*styles = append(*styles, borderStyle)
+
+	// Fill block area
+	for y := block.Y; y < block.Y+block.Height && y < gridH; y++ {
+		for x := block.X; x < block.X+block.Width && x < gridW; x++ {
+			if y >= 0 && x >= 0 {
+				grid[y][x] = ' '
+				styleIdx[y][x] = blockIdx
+			}
+		}
+	}
+
+	// Draw border
+	for x := block.X; x < block.X+block.Width && x < gridW; x++ {
+		if x >= 0 {
+			if block.Y >= 0 && block.Y < gridH {
+				grid[block.Y][x] = '\u2500'
+				styleIdx[block.Y][x] = borderIdx
+			}
+			if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH {
+				grid[block.Y+block.Height-1][x] = '\u2500'
+				styleIdx[block.Y+block.Height-1][x] = borderIdx
+			}
+		}
+	}
+
+	for y := block.Y; y < block.Y+block.Height && y < gridH; y++ {
+		if y >= 0 {
+			if block.X >= 0 && block.X < gridW {
+				grid[y][block.X] = '\u2502'
+				styleIdx[y][block.X] = borderIdx
+			}
+			if block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW {
+				grid[y][block.X+block.Width-1] = '\u2502'
+				styleIdx[y][block.X+block.Width-1] = borderIdx
+			}
+		}
+	}
+
+	// Corners
+	if block.Y >= 0 && block.Y < gridH && block.X >= 0 && block.X < gridW {
+		grid[block.Y][block.X] = '\u250C'
+		styleIdx[block.Y][block.X] = borderIdx
+	}
+	if block.Y >= 0 && block.Y < gridH && block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW {
+		grid[block.Y][block.X+block.Width-1] = '\u2510'
+		styleIdx[block.Y][block.X+block.Width-1] = borderIdx
+	}
+	if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH && block.X >= 0 && block.X < gridW {
+		grid[block.Y+block.Height-1][block.X] = '\u2514'
+		styleIdx[block.Y+block.Height-1][block.X] = borderIdx
+	}
+	if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH && block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW {
+		grid[block.Y+block.Height-1][block.X+block.Width-1] = '\u2518'
+		styleIdx[block.Y+block.Height-1][block.X+block.Width-1] = borderIdx
+	}
+
+	// Draw label if space permits
+	if block.Width > 4 && block.Height > 2 {
+		var label string
+		var sizeStr string
+
+		if block.IsGrouped {
+			label = fmt.Sprintf("%d more", block.GroupCount)
+			sizeStr = FormatSize(block.GroupSize)
+		} else if block.Node != nil {
+			label = block.Node.Name
+			sizeStr = FormatSize(block.Node.TotalSize())
+		}
+
+		innerW := block.Width - 4
+		innerH := block.Height - 2
+		if innerW < 1 || innerH < 1 {
+			return
+		}
+
+		text := label
+		if innerH > 1 && sizeStr != "" {
+			text = label + "\n" + sizeStr
+		}
+
+		wrapped := lipgloss.NewStyle().Width(innerW).Render(text)
+		lines := strings.Split(wrapped, "\n")
+		for dy, line := range lines {
+			if dy >= innerH {
+				break
+			}
+			for dx, ch := range line {
+				if dx >= innerW {
+					break
+				}
+				x, y := block.X+2+dx, block.Y+1+dy
+				if x < gridW && y < gridH {
+					grid[y][x] = ch
+					styleIdx[y][x] = blockIdx
 				}
 			}
 		}

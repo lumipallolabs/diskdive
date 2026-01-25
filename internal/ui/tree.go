@@ -2,12 +2,25 @@ package ui
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/samuli/diskdive/internal/model"
 )
+
+var treeDebugLog *log.Logger
+
+func init() {
+	f, err := os.OpenFile("debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	treeDebugLog = log.New(f, "", log.Lmicroseconds)
+}
 
 const treeSizeBarWidth = 4 // Width of size proportion bar [████]
 
@@ -86,6 +99,35 @@ func (t *TreePanel) MoveDown() {
 		t.cursor++
 		t.ensureVisible()
 	}
+}
+
+// PageUp moves cursor up by quarter page
+func (t *TreePanel) PageUp() {
+	pageSize := (t.height - 4) / 4
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	t.cursor -= pageSize
+	if t.cursor < 0 {
+		t.cursor = 0
+	}
+	t.ensureVisible()
+}
+
+// PageDown moves cursor down by quarter page
+func (t *TreePanel) PageDown() {
+	pageSize := (t.height - 4) / 4
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	t.cursor += pageSize
+	if t.cursor >= len(t.visible) {
+		t.cursor = len(t.visible) - 1
+	}
+	if t.cursor < 0 {
+		t.cursor = 0
+	}
+	t.ensureVisible()
 }
 
 // Collapse collapses current folder
@@ -236,6 +278,13 @@ func (t TreePanel) buildLine(node *model.Node) string {
 
 // View renders the tree
 func (t TreePanel) View() string {
+	start := time.Now()
+	defer func() {
+		if treeDebugLog != nil {
+			treeDebugLog.Printf("TreePanel.View: %v", time.Since(start))
+		}
+	}()
+
 	if t.root == nil {
 		return TreePanelStyle.Width(t.width).Height(t.height).Render("No data")
 	}
@@ -297,10 +346,16 @@ func (t TreePanel) View() string {
 		if i == t.cursor && t.focused {
 			itemStyle = TreeItemSelected.Width(t.width - 2)
 		} else if t.showDiff && node.IsNew {
+			// Entirely new item (yellow)
 			itemStyle = lipgloss.NewStyle().Foreground(ColorNew).Width(t.width - 2)
-		} else if t.showDiff && node.SizeChange() > 0 {
+		} else if t.showDiff && node.IsDir && node.HasGrew && node.HasShrunk {
+			// Folder has both additions and removals (purple/mixed)
+			itemStyle = lipgloss.NewStyle().Foreground(ColorMixed).Width(t.width - 2)
+		} else if t.showDiff && node.HasGrew {
+			// Item or folder grew / contains only additions (orange)
 			itemStyle = lipgloss.NewStyle().Foreground(ColorGrew).Width(t.width - 2)
-		} else if t.showDiff && node.SizeChange() < 0 {
+		} else if t.showDiff && node.HasShrunk {
+			// Item or folder shrunk / contains only removals (cyan)
 			itemStyle = lipgloss.NewStyle().Foreground(ColorShrunk).Width(t.width - 2)
 		} else if node.IsDir {
 			// Directory: light blue (matches treemap)

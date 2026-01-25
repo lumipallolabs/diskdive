@@ -8,6 +8,8 @@ type KeyMap struct {
 	Down         key.Binding
 	Left         key.Binding
 	Right        key.Binding
+	PageUp       key.Binding
+	PageDown     key.Binding
 	Top          key.Binding
 	Bottom       key.Binding
 	Tab          key.Binding
@@ -39,6 +41,14 @@ func DefaultKeyMap() KeyMap {
 		Right: key.NewBinding(
 			key.WithKeys("right", "l"),
 			key.WithHelp("→/l", "expand"),
+		),
+		PageUp: key.NewBinding(
+			key.WithKeys("pgup", "ctrl+u"),
+			key.WithHelp("PgUp", "page up"),
+		),
+		PageDown: key.NewBinding(
+			key.WithKeys("pgdown", "ctrl+d"),
+			key.WithHelp("PgDn", "page down"),
 		),
 		Top: key.NewBinding(
 			key.WithKeys("g", "home"),
@@ -77,7 +87,7 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("?", "help"),
 		),
 		Quit: key.NewBinding(
-			key.WithKeys("q", "ctrl+c", "ctrl+d"),
+			key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q", "quit"),
 		),
 		SelectDrive: key.NewBinding(
