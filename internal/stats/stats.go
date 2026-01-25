@@ -10,7 +10,8 @@ import (
 
 // Stats holds persistent statistics
 type Stats struct {
-	FreedLifetime int64 `json:"freed_lifetime"`
+	FreedLifetime int64  `json:"freed_lifetime"`
+	DefaultDrive  string `json:"default_drive,omitempty"` // Path of default drive to scan on startup
 }
 
 // Manager handles loading and saving stats
@@ -88,6 +89,40 @@ func (m *Manager) FreedLifetime() int64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.stats.FreedLifetime
+}
+
+// DefaultDrive returns the default drive path
+func (m *Manager) DefaultDrive() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.stats.DefaultDrive
+}
+
+// SetDefaultDrive sets the default drive path and saves
+func (m *Manager) SetDefaultDrive(path string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.stats.DefaultDrive == path {
+		return
+	}
+
+	m.stats.DefaultDrive = path
+	m.dirty = true
+
+	// Cancel any pending save timer
+	if m.saveTimer != nil {
+		m.saveTimer.Stop()
+	}
+
+	// Schedule a debounced save
+	m.saveTimer = time.AfterFunc(m.saveDuration, func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.dirty {
+			_ = m.saveLocked()
+		}
+	})
 }
 
 // AddFreed adds to the lifetime freed counter and schedules a debounced save

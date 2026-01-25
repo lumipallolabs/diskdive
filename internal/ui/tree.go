@@ -308,13 +308,14 @@ func (t TreePanel) buildLineContent(node *model.Node) lineContent {
 		sizeBar = "[" + bar.String() + "]"
 	}
 
-	// Change indicator
+	// Change indicator (only show changes >= 200KB to filter out small OS file changes)
+	const minChangeSize int64 = 200 * 1024 // 200KB
 	var changeStr string
 	if t.showDiff {
-		if node.IsDeleted {
+		if node.IsDeleted && node.TotalSize() >= minChangeSize {
 			// Deleted item - show its full size as freed
 			changeStr = fmt.Sprintf("-%s", FormatSize(node.TotalSize()))
-		} else if node.DeletedSize > 0 {
+		} else if node.DeletedSize >= minChangeSize {
 			// Contains deleted children - show accumulated freed size
 			changeStr = fmt.Sprintf("-%s", FormatSize(node.DeletedSize))
 		}

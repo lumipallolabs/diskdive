@@ -76,7 +76,6 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 const (
 	spinnerTickInterval  = 80 * time.Millisecond
 	borderRotationSpeed  = 50  // milliseconds per frame
-	dotAnimationSpeed    = 400 // milliseconds per frame
 	focusDebounceTimeout = 300 * time.Millisecond
 )
 
@@ -126,9 +125,10 @@ type App struct {
 	activePanel Panel
 	showDiff    bool
 	scanning       bool
-	scanPhase      int    // current phase index (0-4)
-	scanFileCount  string // "1,234 files" from scanning
-	scanBytesFound string // "50 GB" from scanning
+	scanPhase      int       // current phase index (0-4)
+	scanStartTime  time.Time // when scan started
+	scanFileCount  string    // "1,234 files" from scanning
+	scanBytesFound string    // "50 GB" from scanning
 	err            error
 	spinnerFrame   int
 	focusVersion   int // incremented on each selection, used for debouncing
@@ -148,6 +148,19 @@ func NewApp() App {
 		logging.Debug.Printf("Failed to load stats: %v", err)
 	}
 
+	// Check if there's a saved default drive that's still available
+	defaultDrive := statsMgr.DefaultDrive()
+	defaultIdx := -1
+	for i, d := range drives {
+		if d.Path == defaultDrive {
+			defaultIdx = i
+			break
+		}
+	}
+
+	// If no valid default, show drive selector on startup
+	showDriveSelector := defaultIdx < 0 && len(drives) > 0
+
 	app := App{
 		header:        NewHeader(drives),
 		tree:          NewTreePanel(),
@@ -161,14 +174,19 @@ func NewApp() App {
 		drives:      drives,
 		activePanel: PanelTree,
 		showDiff:    true, // Show deleted items by default
-		scanning:    len(drives) > 0, // Will start scanning on init
+		scanning:    !showDriveSelector && len(drives) > 0, // Only scan if we have a default
 	}
 
 	app.tree.SetFocused(true)
 	app.treemap.SetFocused(false)
 
-	// Set initial scanning status if we have drives
-	if len(drives) > 0 {
+	// Set up initial state based on whether we have a saved default
+	if showDriveSelector {
+		app.driveSelector.SetVisible(true)
+	} else if defaultIdx >= 0 {
+		app.header.SetSelected(defaultIdx)
+		app.header.SetScanning(true, "")
+	} else if len(drives) > 0 {
 		app.header.SetScanning(true, "")
 	}
 
@@ -183,9 +201,9 @@ func (a App) Init() tea.Cmd {
 	// Set terminal title
 	titleCmd := tea.SetWindowTitle("DISKDIVE")
 
-	// Start scanning first drive if available
-	// We send scanStartMsg first to allow the UI to render the scanning state
-	if len(a.drives) > 0 {
+	// Only start scanning if we have drives and drive selector is not visible
+	// (drive selector is shown on first run or when saved default is unavailable)
+	if len(a.drives) > 0 && !a.driveSelector.IsVisible() {
 		return tea.Batch(titleCmd, func() tea.Msg {
 			return scanStartMsg{}
 		})
@@ -219,14 +237,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case scanStartMsg:
 		// Now actually start the scan and spinner
-		if len(a.drives) > 0 {
+		if drive := a.header.Selected(); drive != nil {
 			a.scanPhase = phaseScanning
+			a.scanStartTime = time.Now()
 			a.scanFileCount = ""
 			a.scanBytesFound = ""
 			spinnerCmd := tea.Tick(spinnerTickInterval, func(t time.Time) tea.Msg {
 				return spinnerTickMsg{}
 			})
-			return a, tea.Batch(a.startScan(a.drives[0].Path), spinnerCmd)
+			progressCmd := a.listenForProgress()
+			return a, tea.Batch(a.startScan(drive.Path), spinnerCmd, progressCmd)
 		}
 		return a, nil
 
@@ -317,9 +337,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case scanProgressMsg:
 		a.scanFileCount = fmt.Sprintf("%d files", msg.progress.FilesScanned)
 		a.scanBytesFound = FormatSize(msg.progress.BytesFound)
-		progress := fmt.Sprintf("%s, %s", a.scanFileCount, a.scanBytesFound)
+		elapsed := time.Since(a.scanStartTime).Truncate(time.Second)
+		progress := fmt.Sprintf("%s, %s, %s", a.scanFileCount, a.scanBytesFound, elapsed)
 		a.header.SetScanning(true, progress)
-		return a, nil
+		// Keep listening for more progress
+		return a, a.listenForProgress()
 
 	case focusDebounceMsg:
 		// Only apply focus if this is still the latest version (user stopped scrolling)
@@ -541,8 +563,14 @@ func (a *App) selectDrive(idx int) tea.Cmd {
 	a.header.SetFreedStats(a.freedThisSession, a.freedLifetime)
 
 	a.header.SetSelected(idx)
+
+	// Save as default drive for next startup
+	if a.statsManager != nil {
+		a.statsManager.SetDefaultDrive(a.drives[idx].Path)
+	}
 	a.scanning = true
 	a.scanPhase = phaseScanning
+	a.scanStartTime = time.Now()
 	a.scanFileCount = ""
 	a.scanBytesFound = ""
 	a.header.SetScanning(true, "")
@@ -553,11 +581,12 @@ func (a *App) selectDrive(idx int) tea.Cmd {
 	// Create a new scanner for each scan
 	a.scanner = scanner.NewWalker(8)
 
-	// Start scan and spinner
+	// Start scan, spinner, and progress listener
 	spinnerCmd := tea.Tick(spinnerTickInterval, func(t time.Time) tea.Msg {
 		return spinnerTickMsg{}
 	})
-	return tea.Batch(a.startScan(a.drives[idx].Path), spinnerCmd)
+	progressCmd := a.listenForProgress()
+	return tea.Batch(a.startScan(a.drives[idx].Path), spinnerCmd, progressCmd)
 }
 
 // syncSelection syncs the tree selection to the treemap
@@ -600,6 +629,17 @@ func (a *App) listenForWatcherEvents() tea.Cmd {
 	}
 }
 
+// listenForProgress returns a command that waits for progress updates from scanner
+func (a *App) listenForProgress() tea.Cmd {
+	return func() tea.Msg {
+		progress, ok := <-a.scanner.Progress()
+		if !ok {
+			return nil // Channel closed (scan complete)
+		}
+		return scanProgressMsg{progress: progress}
+	}
+}
+
 // handleDeletion handles a file/directory deletion event
 func (a *App) handleDeletion(path string) {
 	if a.root == nil {
@@ -625,19 +665,23 @@ func (a *App) handleDeletion(path string) {
 	node.MarkDeleted()
 	logging.Debug.Printf("Watcher: MARKED DELETED: %s (size: %d)", path, size)
 
-	// Update freed counters
-	a.freedThisSession += size
-	a.freedLifetime += size
+	// Only count deletions over 200KB in freed stats (filters out small OS file changes)
+	const minFreedSize = 200 * 1024 // 200KB
+	if size >= minFreedSize {
+		// Update freed counters
+		a.freedThisSession += size
+		a.freedLifetime += size
 
-	// Update stats manager (will debounce saves)
-	if a.statsManager != nil {
-		a.statsManager.AddFreed(size)
+		// Update stats manager (will debounce saves)
+		if a.statsManager != nil {
+			a.statsManager.AddFreed(size)
+		}
+
+		// Update header display
+		a.header.SetFreedStats(a.freedThisSession, a.freedLifetime)
+
+		logging.Debug.Printf("Watcher: marked %s as deleted, freed %d bytes", path, size)
 	}
-
-	// Update header display
-	a.header.SetFreedStats(a.freedThisSession, a.freedLifetime)
-
-	logging.Debug.Printf("Watcher: marked %s as deleted, freed %d bytes", path, size)
 }
 
 // findNodeByPath searches for a node by its path
@@ -858,6 +902,12 @@ func (a App) View() string {
 		spinnerIdx := int(time.Now().UnixMilli()/int64(spinnerTickInterval.Milliseconds())) % len(spinnerFrames)
 		spinner := spinnerFrames[spinnerIdx]
 
+		// Cyberpunk stat styles
+		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")) // dim gray
+		fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FFFF")).Bold(true)  // cyan
+		dataStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#C084FC")).Bold(true)  // purple
+		timeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")).Bold(true)  // amber
+
 		// Only show phases up to and including current (boot-style log)
 		for _, phase := range phases {
 			if phase.name == "" || phase.id > a.scanPhase {
@@ -868,48 +918,42 @@ func (a App) View() string {
 				// Completed phase
 				check := doneStyle.Render("✓")
 				text := doneStyle.Render(phase.name)
-				// Add stats for scanning phase
-				if phase.id == phaseScanning && a.scanFileCount != "" {
-					stats := doneStyle.Render(fmt.Sprintf(" · %s · %s", a.scanFileCount, a.scanBytesFound))
-					line = fmt.Sprintf("  %s %s%s", check, text, stats)
-				} else {
-					line = fmt.Sprintf("  %s %s", check, text)
-				}
+				line = fmt.Sprintf("  %s %s", check, text)
 			} else {
 				// Current phase (phase.id == a.scanPhase)
 				spin := activeStyle.Render(spinner)
 				text := activeStyle.Render(phase.name)
-				// Animated dots (cycle through ., .., ...)
-				dotCount := (int(time.Now().UnixMilli()/dotAnimationSpeed) % 3) + 1
-				dots := activeStyle.Render(strings.Repeat(".", dotCount))
-				// Add live stats for scanning phase
-				if phase.id == phaseScanning && a.scanFileCount != "" {
-					stats := activeStyle.Render(fmt.Sprintf(" · %s · %s", a.scanFileCount, a.scanBytesFound))
-					line = fmt.Sprintf("  %s %s%s%s", spin, text, dots, stats)
-				} else {
-					line = fmt.Sprintf("  %s %s%s", spin, text, dots)
-				}
+				// Animated scanning bar
+				scanFrames := []string{"▱▱▱", "▰▱▱", "▰▰▱", "▰▰▰", "▱▰▰", "▱▱▰"}
+				frameIdx := int(time.Now().UnixMilli()/150) % len(scanFrames)
+				scanBar := activeStyle.Render(" " + scanFrames[frameIdx])
+				line = fmt.Sprintf("  %s %s%s", spin, text, scanBar)
 			}
 			logLines = append(logLines, line)
 		}
 
-		// Pad with empty lines at top to keep panel height constant (5 phases)
-		totalLines := phaseDone // Number of displayable phases
-		for len(logLines) < totalLines {
-			logLines = append([]string{""}, logLines...)
+		// Add stats on separate lines during/after scanning phase
+		if a.scanFileCount != "" {
+			elapsed := time.Since(a.scanStartTime).Truncate(time.Second)
+			logLines = append(logLines, "")
+			logLines = append(logLines, fmt.Sprintf("    %s %s", labelStyle.Render("FILES"), fileStyle.Render(a.scanFileCount)))
+			logLines = append(logLines, fmt.Sprintf("    %s  %s", labelStyle.Render("DATA"), dataStyle.Render(a.scanBytesFound)))
+			logLines = append(logLines, fmt.Sprintf("    %s  %s", labelStyle.Render("TIME"), timeStyle.Render(elapsed.String())))
 		}
 
 		logContent := strings.Join(logLines, "\n")
 
-		// Render content with padding (no border - we'll draw it manually)
+		// Render content centered within box
 		innerContent := lipgloss.NewStyle().
-			Padding(1, 3).
+			Padding(0, 3).
 			Width(48). // 50 - 2 for border
-			Height(totalLines).
 			Render(logContent)
 
-		// Build spinning gradient border
-		scanningBox := renderSpinningBorder(innerContent, 50, totalLines+4, time.Now())
+		// Build spinning gradient border with fixed height, content centered
+		boxHeight := 9 // fixed height for consistent look
+		scanningBox := renderSpinningBorder(
+			lipgloss.Place(48, boxHeight-2, lipgloss.Left, lipgloss.Center, innerContent),
+			50, boxHeight, time.Now())
 
 		// Center the box within a full-size panel
 		centered := lipgloss.Place(

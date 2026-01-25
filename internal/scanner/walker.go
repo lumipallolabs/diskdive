@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/charlievieth/fastwalk"
 	"github.com/samuli/diskdive/internal/model"
@@ -54,7 +55,8 @@ func (w *Walker) Scan(ctx context.Context, root string) (*model.Node, error) {
 	rootInfo := getPlatformRootInfo(absRoot)
 
 	// Collect entries with mutex - simpler and faster than channel for high throughput
-	entries := make([]nodeEntry, 0, 5000000)
+	// Start with 100k capacity - Go will grow as needed, avoids large upfront allocation on low-RAM machines
+	entries := make([]nodeEntry, 0, 100000)
 	var entriesMu sync.Mutex
 
 	// Track seen paths/inodes for deduplication
@@ -65,6 +67,29 @@ func (w *Walker) Scan(ctx context.Context, root string) (*model.Node, error) {
 		Follow:     false, // Don't follow symlinks
 		NumWorkers: w.workers,
 	}
+
+	// Start progress reporter goroutine
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				// Send current progress (non-blocking)
+				select {
+				case w.progressCh <- Progress{
+					FilesScanned: atomic.LoadInt64(&w.progress.FilesScanned),
+					DirsScanned:  atomic.LoadInt64(&w.progress.DirsScanned),
+					BytesFound:   atomic.LoadInt64(&w.progress.BytesFound),
+				}:
+				default:
+				}
+			}
+		}
+	}()
 
 	// Walk filesystem with fastwalk
 	walkErr := fastwalk.Walk(conf, absRoot, func(path string, d fs.DirEntry, err error) error {
@@ -123,6 +148,9 @@ func (w *Walker) Scan(ctx context.Context, root string) (*model.Node, error) {
 
 		return nil
 	})
+
+	// Stop progress reporter
+	close(done)
 
 	if walkErr != nil && walkErr != ctx.Err() {
 		close(w.progressCh)

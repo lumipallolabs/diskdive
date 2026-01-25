@@ -137,10 +137,13 @@ func HelpBar(width int) string {
 	keyStyle := HelpKey
 	sepStyle := HelpStyle
 
-	hints := []struct {
+	// Full hints for wide terminals, abbreviated for narrow
+	type hint struct {
 		key  string
 		desc string
-	}{
+	}
+
+	fullHints := []hint{
 		{"↑↓←→/hjkl", "navigate"},
 		{"Enter", "zoom in"},
 		{"Esc", "back"},
@@ -151,12 +154,42 @@ func HelpBar(width int) string {
 		{"q", "quit"},
 	}
 
-	var parts []string
-	for _, hint := range hints {
-		parts = append(parts, keyStyle.Render(hint.key)+sepStyle.Render(" "+hint.desc))
+	// Compact hints for narrow terminals (arrows more universal than vim keys)
+	compactHints := []hint{
+		{"↑↓←→", "nav"},
+		{"Enter", "in"},
+		{"Esc", "out"},
+		{"?", "help"},
+		{"q", "quit"},
 	}
 
-	bar := strings.Join(parts, sepStyle.Render("  |  "))
+	// Minimal hints for very narrow terminals
+	minimalHints := []hint{
+		{"?", "help"},
+		{"q", "quit"},
+	}
 
-	return HelpStyle.Width(width).Render(bar)
+	// Choose hint set based on width
+	var hints []hint
+	if width >= 100 {
+		hints = fullHints
+	} else if width >= 60 {
+		hints = compactHints
+	} else {
+		hints = minimalHints
+	}
+
+	var parts []string
+	for _, h := range hints {
+		parts = append(parts, keyStyle.Render(h.key)+sepStyle.Render(" "+h.desc))
+	}
+
+	separator := "  |  "
+	if width < 80 {
+		separator = " | "
+	}
+
+	bar := strings.Join(parts, sepStyle.Render(separator))
+
+	return HelpStyle.Width(width).MaxHeight(1).Render(bar)
 }

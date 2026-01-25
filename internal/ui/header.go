@@ -108,7 +108,7 @@ func (h Header) View() string {
 	}
 
 	// Stats (only show when not scanning - scanning status shown in center panel)
-	var stats string
+	var stats, statsCompact string
 	if !h.scanning {
 		if drive := h.Selected(); drive != nil {
 			usedPct := drive.UsedPercent()
@@ -123,6 +123,11 @@ func (h Header) View() string {
 				bar,
 				usedPct,
 			))
+			statsCompact = StatsStyle.Render(fmt.Sprintf(
+				"Used: %s / %s",
+				FormatSize(drive.UsedBytes()),
+				FormatSize(drive.TotalBytes),
+			))
 		}
 	}
 
@@ -132,8 +137,39 @@ func (h Header) View() string {
 	freedWidth := lipgloss.Width(freedStats)
 	statsWidth := lipgloss.Width(stats)
 
+	sep := lipgloss.NewStyle().Foreground(ColorBorder).Render(" │ ")
+	sepWidth := lipgloss.Width(sep)
+
+	// Calculate total content width
+	totalContent := appNameWidth + sepWidth + tabsWidth + freedWidth + statsWidth + 4 // +4 for min gaps
+
+	// For narrow terminals, progressively hide elements
+	if h.width < totalContent {
+		// First: switch to compact stats (no progress bar)
+		if statsWidth > 0 && statsCompact != "" {
+			stats = statsCompact
+			statsWidth = lipgloss.Width(stats)
+			totalContent = appNameWidth + sepWidth + tabsWidth + freedWidth + statsWidth + 4
+		}
+	}
+	if h.width < totalContent {
+		// Then drop freed stats
+		if freedWidth > 0 {
+			freedStats = ""
+			freedWidth = 0
+			totalContent = appNameWidth + sepWidth + tabsWidth + statsWidth + 2
+		}
+	}
+	if h.width < totalContent {
+		// Finally drop stats entirely
+		if statsWidth > 0 {
+			stats = ""
+			statsWidth = 0
+			totalContent = appNameWidth + sepWidth + tabsWidth
+		}
+	}
+
 	// Calculate gaps to distribute remaining space
-	totalContent := appNameWidth + tabsWidth + freedWidth + statsWidth + 4 // +4 for separators
 	remainingSpace := h.width - totalContent
 	if remainingSpace < 2 {
 		remainingSpace = 2
@@ -149,8 +185,7 @@ func (h Header) View() string {
 		rightGap = 1
 	}
 
-	sep := lipgloss.NewStyle().Foreground(ColorBorder).Render(" │ ")
 	line := appName + sep + driveTabs + strings.Repeat(" ", leftGap) + freedStats + strings.Repeat(" ", rightGap) + stats
 
-	return HeaderStyle.Render(line)
+	return HeaderStyle.MaxHeight(1).Render(line)
 }
