@@ -649,10 +649,10 @@ func (t TreemapPanel) drawBlock(grid [][]rune, colors [][]lipgloss.Style, block 
 		// Default coloring based on depth or type
 		if block.Node != nil && block.Node.IsDir {
 			bgColor = lipgloss.Color("#1E3A5F")
-			fgColor = lipgloss.Color("#7DD3FC")
+			fgColor = ColorDir
 		} else {
 			bgColor = lipgloss.Color("#2D2D2D")
-			fgColor = lipgloss.Color("#E4E4E7")
+			fgColor = ColorFile
 		}
 	}
 
@@ -806,10 +806,10 @@ func (t TreemapPanel) drawBlockIndexed(grid [][]rune, styleIdx [][]int, styles *
 	} else {
 		if block.Node != nil && block.Node.IsDir {
 			bgColor = lipgloss.Color("#1E3A5F")
-			fgColor = lipgloss.Color("#7DD3FC")
+			fgColor = ColorDir
 		} else {
 			bgColor = lipgloss.Color("#2D2D2D")
-			fgColor = lipgloss.Color("#E4E4E7")
+			fgColor = ColorFile
 		}
 	}
 

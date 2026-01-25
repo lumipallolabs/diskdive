@@ -6,24 +6,28 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Colors
+// Colors - cyberpunk/neon palette
 var (
-	ColorPrimary   = lipgloss.Color("#7D56F4")
-	ColorSecondary = lipgloss.Color("#5A4FCF")
-	ColorSuccess   = lipgloss.Color("#73F59F")
-	ColorWarning   = lipgloss.Color("#F5A623")
-	ColorDanger    = lipgloss.Color("#F56565")
-	ColorMuted     = lipgloss.Color("#6B7280")
-	ColorBorder    = lipgloss.Color("#3F3F46")
+	ColorPrimary   = lipgloss.Color("#C084FC") // soft violet
+	ColorSecondary = lipgloss.Color("#BD93F9") // soft purple
+	ColorSuccess   = lipgloss.Color("#39FF14") // neon green
+	ColorWarning   = lipgloss.Color("#FFB86C") // orange
+	ColorDanger    = lipgloss.Color("#FF5555") // red
+	ColorMuted     = lipgloss.Color("#4A5568") // darker muted
+	ColorBorder    = lipgloss.Color("#4A5568") // border
+	ColorCyan      = lipgloss.Color("#00FFFF") // neon cyan
+	ColorSize      = lipgloss.Color("#39FF14") // neon green for sizes
+	ColorDir       = lipgloss.Color("#00FFFF") // cyan for directories
+	ColorFile      = lipgloss.Color("#A0A0A0") // dimmer for files
 
 	// Change colors (warm/cool palette - colorblind friendly)
-	ColorGrew       = lipgloss.Color("#FDBA74") // light orange - growth
+	ColorGrew       = lipgloss.Color("#FFB86C") // orange - growth
 	ColorGrewBg     = lipgloss.Color("#7C2D12") // dark orange bg
-	ColorShrunk     = lipgloss.Color("#5EEAD4") // teal - shrinkage (distinct from directory blue)
+	ColorShrunk     = lipgloss.Color("#5EEAD4") // teal - shrinkage
 	ColorShrunkBg   = lipgloss.Color("#115E59") // dark teal bg
-	ColorNew        = lipgloss.Color("#FDE047") // yellow
-	ColorUnchanged  = lipgloss.Color("#9CA3AF") // gray
-	ColorMixed      = lipgloss.Color("#E9D5FF") // light purple - folder has both grew and shrunk
+	ColorNew        = lipgloss.Color("#F1FA8C") // yellow
+	ColorUnchanged  = lipgloss.Color("#6272A4") // muted purple-gray
+	ColorMixed      = lipgloss.Color("#FF79C6") // pink - folder has both grew and shrunk
 	ColorMixedBg    = lipgloss.Color("#4C1D95") // dark purple bg
 )
 
@@ -78,13 +82,13 @@ var (
 				Border(lipgloss.ThickBorder()).
 				BorderForeground(ColorPrimary)
 
-	// Help bar
+	// Help bar - dimmer with bright key highlights
 	HelpStyle = lipgloss.NewStyle().
-			Foreground(ColorMuted).
+			Foreground(lipgloss.Color("#3D4555")). // very dim
 			Padding(0, 1)
 
 	HelpKey = lipgloss.NewStyle().
-		Foreground(ColorPrimary).
+		Foreground(ColorCyan). // bright cyan keys
 		Bold(true)
 
 	// Change indicators

@@ -1,5 +1,7 @@
 package model
 
+import "runtime"
+
 // Node represents a file or directory in the scanned tree
 type Node struct {
 	Path     string  `json:"path"`
@@ -25,12 +27,21 @@ func (n *Node) TotalSize() int64 {
 // ComputeSizes calculates and caches sizes for the entire tree
 // Call this once after building/loading the tree
 func (n *Node) ComputeSizes() int64 {
+	var counter int64
+	return n.computeSizesWithYield(&counter)
+}
+
+func (n *Node) computeSizesWithYield(counter *int64) int64 {
+	*counter++
+	if *counter%500 == 0 {
+		runtime.Gosched()
+	}
 	if !n.IsDir {
 		return n.Size
 	}
 	var total int64
 	for _, child := range n.Children {
-		total += child.ComputeSizes()
+		total += child.computeSizesWithYield(counter)
 	}
 	n.Size = total
 	return total

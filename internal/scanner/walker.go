@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -60,8 +61,7 @@ func (w *Walker) Scan(ctx context.Context, root string) (*model.Node, error) {
 	// Build tree recursively with parallelism
 	w.scanDir(ctx, rootNode)
 
-	// Cache computed sizes for fast access
-	rootNode.ComputeSizes()
+	// Note: ComputeSizes is called by the UI layer to allow phased progress display
 
 	close(w.progressCh)
 	return rootNode, nil
@@ -102,10 +102,17 @@ func (w *Walker) scanDir(ctx context.Context, node *model.Node) {
 
 		if !entry.IsDir() {
 			child.Size = info.Size()
-			atomic.AddInt64(&w.progress.FilesScanned, 1)
+			files := atomic.AddInt64(&w.progress.FilesScanned, 1)
 			atomic.AddInt64(&w.progress.BytesFound, info.Size())
+			// Yield frequently to let UI update
+			if files%100 == 0 {
+				runtime.Gosched()
+			}
 		} else {
-			atomic.AddInt64(&w.progress.DirsScanned, 1)
+			dirs := atomic.AddInt64(&w.progress.DirsScanned, 1)
+			if dirs%50 == 0 {
+				runtime.Gosched()
+			}
 
 			wg.Add(1)
 			sem <- struct{}{}

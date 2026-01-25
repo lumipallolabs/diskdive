@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -65,10 +66,52 @@ func (s SortMode) String() string {
 // scanStartMsg triggers the actual scan start (after UI has rendered)
 type scanStartMsg struct{}
 
-// scanCompleteMsg is sent when a scan finishes
+// scanCompleteMsg is sent when filesystem scan finishes
 type scanCompleteMsg struct {
 	root *model.Node
 	err  error
+}
+
+// computeSizesMsg triggers size computation phase
+type computeSizesMsg struct {
+	root *model.Node
+}
+
+// computeSizesDoneMsg is sent when size computation completes
+type computeSizesDoneMsg struct {
+	root *model.Node
+}
+
+// loadCacheMsg triggers cache loading phase
+type loadCacheMsg struct {
+	root *model.Node
+}
+
+// loadCacheDoneMsg is sent when cache loading completes
+type loadCacheDoneMsg struct {
+	root *model.Node
+	prev *model.Node
+}
+
+// applyDiffMsg triggers diff computation phase
+type applyDiffMsg struct {
+	root *model.Node
+	prev *model.Node
+}
+
+// applyDiffDoneMsg is sent when diff computation completes
+type applyDiffDoneMsg struct {
+	root *model.Node
+}
+
+// saveCacheMsg triggers cache saving phase
+type saveCacheMsg struct {
+	root *model.Node
+}
+
+// saveCacheDoneMsg is sent when cache saving completes
+type saveCacheDoneMsg struct {
+	root *model.Node
 }
 
 // scanProgressMsg is sent during scanning
@@ -80,6 +123,30 @@ type scanProgressMsg struct {
 type focusDebounceMsg struct {
 	version int
 	node    *model.Node
+}
+
+// spinnerTickMsg triggers spinner animation
+type spinnerTickMsg struct{}
+
+// Spinner frames - cyberpunk style
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// Scan phases
+const (
+	phaseScanning = iota
+	phaseComputingSizes
+	phaseLoadingCache
+	phaseComparingChanges
+	phaseSavingCache
+	phaseDone
+)
+
+var phaseNames = []string{
+	"Scanning files",
+	"Computing sizes",
+	"Loading cache",
+	"Comparing changes",
+	"Saving cache",
 }
 
 // App is the main application model
@@ -102,12 +169,16 @@ type App struct {
 	prevRoot *model.Node
 
 	// UI state
-	activePanel  Panel
-	sortMode     SortMode
-	showDiff     bool
-	scanning     bool
-	err          error
-	focusVersion int // incremented on each selection, used for debouncing
+	activePanel    Panel
+	sortMode       SortMode
+	showDiff       bool
+	scanning       bool
+	scanPhase      int    // current phase index (0-4)
+	scanFileCount  string // "1,234 files" from scanning
+	scanBytesFound string // "50 GB" from scanning
+	err            error
+	spinnerFrame   int
+	focusVersion   int // incremented on each selection, used for debouncing
 
 	// Dimensions
 	width  int
@@ -146,14 +217,17 @@ func NewApp() App {
 
 // Init implements tea.Model
 func (a App) Init() tea.Cmd {
+	// Set terminal title
+	titleCmd := tea.SetWindowTitle("DISKDIVE")
+
 	// Start scanning first drive if available
 	// We send scanStartMsg first to allow the UI to render the scanning state
 	if len(a.drives) > 0 {
-		return func() tea.Msg {
+		return tea.Batch(titleCmd, func() tea.Msg {
 			return scanStartMsg{}
-		}
+		})
 	}
-	return nil
+	return titleCmd
 }
 
 // startScan starts scanning a path and returns a command
@@ -181,32 +255,87 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleKey(msg)
 
 	case scanStartMsg:
-		// Now actually start the scan
+		// Now actually start the scan and spinner
 		if len(a.drives) > 0 {
-			return a, a.startScan(a.drives[0].Path)
+			a.scanPhase = phaseScanning
+			a.scanFileCount = ""
+			a.scanBytesFound = ""
+			spinnerCmd := tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
+				return spinnerTickMsg{}
+			})
+			return a, tea.Batch(a.startScan(a.drives[0].Path), spinnerCmd)
 		}
 		return a, nil
 
 	case scanCompleteMsg:
-		a.scanning = false
 		if msg.err != nil {
+			a.scanning = false
+			a.scanPhase = phaseDone
 			a.err = msg.err
 			a.header.SetScanning(false, "")
 			return a, nil
 		}
-
-		// Load previous scan for diff
-		if drive := a.header.Selected(); drive != nil {
-			prev, _ := a.cache.LoadLatest(drive.Letter)
-			a.prevRoot = prev
-
-			// Apply diff
-			cache.ApplyDiff(msg.root, prev)
-
-			// Save current scan
-			_ = a.cache.Save(drive.Letter, msg.root)
+		// Move to computing sizes phase
+		a.scanPhase = phaseComputingSizes
+		return a, func() tea.Msg {
+			return computeSizesMsg{root: msg.root}
 		}
 
+	case computeSizesMsg:
+		return a, func() tea.Msg {
+			msg.root.ComputeSizes()
+			return computeSizesDoneMsg{root: msg.root}
+		}
+
+	case computeSizesDoneMsg:
+		// Move to loading cache phase
+		a.scanPhase = phaseLoadingCache
+		return a, func() tea.Msg {
+			return loadCacheMsg{root: msg.root}
+		}
+
+	case loadCacheMsg:
+		return a, func() tea.Msg {
+			var prev *model.Node
+			if drive := a.header.Selected(); drive != nil {
+				prev, _ = a.cache.LoadLatest(drive.Letter)
+			}
+			return loadCacheDoneMsg{root: msg.root, prev: prev}
+		}
+
+	case loadCacheDoneMsg:
+		a.prevRoot = msg.prev
+		// Move to diff phase
+		a.scanPhase = phaseComparingChanges
+		return a, func() tea.Msg {
+			return applyDiffMsg{root: msg.root, prev: msg.prev}
+		}
+
+	case applyDiffMsg:
+		return a, func() tea.Msg {
+			cache.ApplyDiff(msg.root, msg.prev)
+			return applyDiffDoneMsg{root: msg.root}
+		}
+
+	case applyDiffDoneMsg:
+		// Move to save phase
+		a.scanPhase = phaseSavingCache
+		return a, func() tea.Msg {
+			return saveCacheMsg{root: msg.root}
+		}
+
+	case saveCacheMsg:
+		return a, func() tea.Msg {
+			if drive := a.header.Selected(); drive != nil {
+				_ = a.cache.Save(drive.Letter, msg.root)
+			}
+			return saveCacheDoneMsg{root: msg.root}
+		}
+
+	case saveCacheDoneMsg:
+		// All done!
+		a.scanning = false
+		a.scanPhase = phaseDone
 		a.root = msg.root
 		a.tree.SetRoot(msg.root)
 		a.treemap.SetRoot(msg.root)
@@ -221,9 +350,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case scanProgressMsg:
-		progress := fmt.Sprintf("%d files, %s",
-			msg.progress.FilesScanned,
-			FormatSize(msg.progress.BytesFound))
+		a.scanFileCount = fmt.Sprintf("%d files", msg.progress.FilesScanned)
+		a.scanBytesFound = FormatSize(msg.progress.BytesFound)
+		progress := fmt.Sprintf("%s, %s", a.scanFileCount, a.scanBytesFound)
 		a.header.SetScanning(true, progress)
 		return a, nil
 
@@ -231,6 +360,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Only apply focus if this is still the latest version (user stopped scrolling)
 		if msg.version == a.focusVersion && msg.node != nil {
 			a.treemap.SetFocus(msg.node)
+		}
+		return a, nil
+
+	case spinnerTickMsg:
+		// Keep ticking while scanning to force UI redraws
+		if a.scanning || a.root == nil {
+			return a, tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
+				return spinnerTickMsg{}
+			})
 		}
 		return a, nil
 	}
@@ -415,6 +553,9 @@ func (a *App) selectDrive(idx int) tea.Cmd {
 
 	a.header.SetSelected(idx)
 	a.scanning = true
+	a.scanPhase = phaseScanning
+	a.scanFileCount = ""
+	a.scanBytesFound = ""
 	a.header.SetScanning(true, "")
 	a.root = nil
 	a.prevRoot = nil
@@ -424,7 +565,11 @@ func (a *App) selectDrive(idx int) tea.Cmd {
 	// Create a new scanner for each scan
 	a.scanner = scanner.NewWalker(8)
 
-	return a.startScan(a.drives[idx].Path)
+	// Start scan and spinner
+	spinnerCmd := tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
+		return spinnerTickMsg{}
+	})
+	return tea.Batch(a.startScan(a.drives[idx].Path), spinnerCmd)
 }
 
 // syncSelection syncs the tree selection to the treemap
@@ -484,6 +629,113 @@ func (a *App) updateLayout() {
 	a.driveSelector.SetSize(a.width, a.height)
 }
 
+// renderSpinningBorder draws a box with a gradient border that spins over time
+func renderSpinningBorder(content string, width, height int, t time.Time) string {
+	// Cyberpunk neon gradient: cyan → blue → purple → magenta → pink
+	shades := []string{
+		"#00FFFF", // cyan
+		"#00D4FF", // light blue
+		"#00AAFF", // sky blue
+		"#0080FF", // blue
+		"#4060FF", // indigo
+		"#8040FF", // violet
+		"#A020F0", // purple
+		"#C020C0", // magenta
+		"#E040A0", // pink-magenta
+		"#FF60B0", // hot pink
+		"#E040A0", // pink-magenta
+		"#C020C0", // magenta
+		"#A020F0", // purple
+		"#8040FF", // violet
+		"#4060FF", // indigo
+		"#0080FF", // blue
+		"#00AAFF", // sky blue
+		"#00D4FF", // light blue
+	}
+
+	// Calculate perimeter positions
+	// Top: width chars, Right: height-2 chars, Bottom: width chars, Left: height-2 chars
+	innerW := width - 2
+	innerH := height - 2
+	perimeter := 2*innerW + 2*innerH + 4 // +4 for corners
+
+	// Time-based offset for spinning effect (reverse direction)
+	offset := int(t.UnixMilli()/50) % perimeter
+
+	// Helper to get color at position
+	getColor := func(pos int) lipgloss.Style {
+		// Adjust position by offset for spinning (subtract for reverse direction)
+		adjustedPos := (pos - offset + perimeter) % perimeter
+		// Map position to shade (spread shades across perimeter)
+		shadeIdx := (adjustedPos * len(shades) / perimeter) % len(shades)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(shades[shadeIdx]))
+	}
+
+	// Border characters (rounded)
+	const (
+		topLeft     = "╭"
+		topRight    = "╮"
+		bottomLeft  = "╰"
+		bottomRight = "╯"
+		horizontal  = "─"
+		vertical    = "│"
+	)
+
+	var result strings.Builder
+	pos := 0
+
+	// Top border
+	result.WriteString(getColor(pos).Render(topLeft))
+	pos++
+	for i := 0; i < innerW; i++ {
+		result.WriteString(getColor(pos).Render(horizontal))
+		pos++
+	}
+	result.WriteString(getColor(pos).Render(topRight))
+	pos++
+	result.WriteString("\n")
+
+	// Content lines with side borders
+	contentLines := strings.Split(content, "\n")
+	// Pad content to fill height
+	for len(contentLines) < innerH {
+		contentLines = append(contentLines, "")
+	}
+
+	for i := 0; i < innerH; i++ {
+		// Left border (going down)
+		leftColor := getColor(perimeter - 1 - i) // Left side goes in reverse
+		result.WriteString(leftColor.Render(vertical))
+
+		// Content line (pad to width)
+		line := ""
+		if i < len(contentLines) {
+			line = contentLines[i]
+		}
+		// Pad line to inner width
+		lineWidth := lipgloss.Width(line)
+		if lineWidth < innerW {
+			line += strings.Repeat(" ", innerW-lineWidth)
+		}
+		result.WriteString(line)
+
+		// Right border (going down)
+		result.WriteString(getColor(pos).Render(vertical))
+		pos++
+		result.WriteString("\n")
+	}
+
+	// Bottom border (going right to left visually, but we write left to right)
+	bottomStart := pos
+	result.WriteString(getColor(perimeter - innerH - 1).Render(bottomLeft))
+	for i := 0; i < innerW; i++ {
+		result.WriteString(getColor(bottomStart + innerW - i).Render(horizontal))
+	}
+	result.WriteString(getColor(bottomStart).Render(bottomRight))
+
+	return result.String()
+}
+
 // View implements tea.Model
 func (a App) View() string {
 	start := time.Now()
@@ -517,24 +769,69 @@ func (a App) View() string {
 			panelHeight = 1
 		}
 
-		var statusText string
-		if a.scanning {
-			progress := a.header.ScanProgress()
-			if progress != "" {
-				statusText = progress
-			} else {
-				statusText = "Analyzing..."
+		// Build terminal-style log lines (boot style - only show up to current phase)
+		var logLines []string
+
+		// Styles for different states
+		doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#39FF14")) // neon green
+		activeStyle := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true)
+
+		// Time-based spinner
+		spinnerIdx := int(time.Now().UnixMilli()/80) % len(spinnerFrames)
+		spinner := spinnerFrames[spinnerIdx]
+
+		// Only show phases up to and including current (boot-style log)
+		for i, name := range phaseNames {
+			if i > a.scanPhase {
+				break // Don't show future phases
 			}
-		} else {
-			statusText = "Loading..."
+			var line string
+			if i < a.scanPhase {
+				// Completed phase
+				check := doneStyle.Render("✓")
+				text := doneStyle.Render(name)
+				// Add stats for scanning phase
+				if i == phaseScanning && a.scanFileCount != "" {
+					stats := doneStyle.Render(fmt.Sprintf(" · %s · %s", a.scanFileCount, a.scanBytesFound))
+					line = fmt.Sprintf("  %s %s%s", check, text, stats)
+				} else {
+					line = fmt.Sprintf("  %s %s", check, text)
+				}
+			} else {
+				// Current phase (i == a.scanPhase)
+				spin := activeStyle.Render(spinner)
+				text := activeStyle.Render(name)
+				// Animated dots (cycle through ., .., ...)
+				dotCount := (int(time.Now().UnixMilli()/400) % 3) + 1
+				dots := activeStyle.Render(strings.Repeat(".", dotCount))
+				// Add live stats for scanning phase
+				if i == phaseScanning && a.scanFileCount != "" {
+					stats := activeStyle.Render(fmt.Sprintf(" · %s · %s", a.scanFileCount, a.scanBytesFound))
+					line = fmt.Sprintf("  %s %s%s%s", spin, text, dots, stats)
+				} else {
+					line = fmt.Sprintf("  %s %s%s", spin, text, dots)
+				}
+			}
+			logLines = append(logLines, line)
 		}
 
-		// Create the status text box
-		scanningBox := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorPrimary).
+		// Pad with empty lines at top to keep panel height constant (5 phases)
+		totalLines := len(phaseNames)
+		for len(logLines) < totalLines {
+			logLines = append([]string{""}, logLines...)
+		}
+
+		logContent := strings.Join(logLines, "\n")
+
+		// Render content with padding (no border - we'll draw it manually)
+		innerContent := lipgloss.NewStyle().
 			Padding(1, 3).
-			Render(statusText)
+			Width(48). // 50 - 2 for border
+			Height(totalLines).
+			Render(logContent)
+
+		// Build spinning gradient border
+		scanningBox := renderSpinningBorder(innerContent, 50, totalLines+4, time.Now())
 
 		// Center the box within a full-size panel
 		centered := lipgloss.Place(

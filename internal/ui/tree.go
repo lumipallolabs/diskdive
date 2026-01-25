@@ -315,13 +315,25 @@ func (t TreePanel) View() string {
 		name := node.Name
 		size := FormatSize(node.TotalSize())
 
-		// Size bar for directories
+		// Size bar for directories - gradient style
 		var sizeBar string
 		if node.IsDir && node.Parent != nil && node.Parent.TotalSize() > 0 {
 			pct := float64(node.TotalSize()) / float64(node.Parent.TotalSize())
 			barW := treeSizeBarWidth
-			filled := int(pct * float64(barW))
-			sizeBar = "[" + strings.Repeat("\u2588", filled) + strings.Repeat("\u2591", barW-filled) + "]"
+			filledFloat := pct * float64(barW)
+			filled := int(filledFloat)
+			// Gradient blocks: █ ▓ ▒ ░
+			var bar strings.Builder
+			for j := 0; j < barW; j++ {
+				if j < filled {
+					bar.WriteRune('█')
+				} else if float64(j) < filledFloat+0.5 && filled < barW {
+					bar.WriteRune('▓') // partial fill
+				} else {
+					bar.WriteRune('░')
+				}
+			}
+			sizeBar = "[" + bar.String() + "]"
 		}
 
 		// Change indicator
@@ -358,11 +370,11 @@ func (t TreePanel) View() string {
 			// Item or folder shrunk / contains only removals (cyan)
 			itemStyle = lipgloss.NewStyle().Foreground(ColorShrunk).Width(t.width - 2)
 		} else if node.IsDir {
-			// Directory: light blue (matches treemap)
-			itemStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7DD3FC")).Width(t.width - 2)
+			// Directory: neon cyan
+			itemStyle = lipgloss.NewStyle().Foreground(ColorDir).Width(t.width - 2)
 		} else {
-			// File: light grey (matches treemap)
-			itemStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E4E4E7")).Width(t.width - 2)
+			// File: dimmer
+			itemStyle = lipgloss.NewStyle().Foreground(ColorFile).Width(t.width - 2)
 		}
 		line = itemStyle.Render(line)
 

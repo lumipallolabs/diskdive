@@ -1,34 +1,48 @@
 package cache
 
-import "github.com/samuli/diskdive/internal/model"
+import (
+	"runtime"
+
+	"github.com/samuli/diskdive/internal/model"
+)
 
 // ApplyDiff compares current scan against previous and populates diff fields
 func ApplyDiff(current, previous *model.Node) {
+	var counter int64
 	if previous == nil {
-		markAllNew(current)
-		propagateChanges(current)
+		markAllNew(current, &counter)
+		propagateChanges(current, &counter)
 		return
 	}
 
 	// Build lookup map of previous nodes by path
 	prevMap := make(map[string]*model.Node)
-	buildPathMap(previous, prevMap)
+	buildPathMap(previous, prevMap, &counter)
 
 	// Apply diff info to current tree
-	applyDiffRecursive(current, prevMap)
+	applyDiffRecursive(current, prevMap, &counter)
 
 	// Propagate HasGrew/HasShrunk flags up the tree
-	propagateChanges(current)
+	propagateChanges(current, &counter)
 }
 
-func buildPathMap(node *model.Node, m map[string]*model.Node) {
-	m[node.Path] = node
-	for _, child := range node.Children {
-		buildPathMap(child, m)
+func yieldIfNeeded(counter *int64) {
+	*counter++
+	if *counter%200 == 0 {
+		runtime.Gosched()
 	}
 }
 
-func applyDiffRecursive(node *model.Node, prevMap map[string]*model.Node) {
+func buildPathMap(node *model.Node, m map[string]*model.Node, counter *int64) {
+	yieldIfNeeded(counter)
+	m[node.Path] = node
+	for _, child := range node.Children {
+		buildPathMap(child, m, counter)
+	}
+}
+
+func applyDiffRecursive(node *model.Node, prevMap map[string]*model.Node, counter *int64) {
+	yieldIfNeeded(counter)
 	prev, exists := prevMap[node.Path]
 	if exists {
 		node.PrevSize = prev.TotalSize()
@@ -39,20 +53,22 @@ func applyDiffRecursive(node *model.Node, prevMap map[string]*model.Node) {
 	}
 
 	for _, child := range node.Children {
-		applyDiffRecursive(child, prevMap)
+		applyDiffRecursive(child, prevMap, counter)
 	}
 }
 
-func markAllNew(node *model.Node) {
+func markAllNew(node *model.Node, counter *int64) {
+	yieldIfNeeded(counter)
 	node.IsNew = true
 	for _, child := range node.Children {
-		markAllNew(child)
+		markAllNew(child, counter)
 	}
 }
 
 // propagateChanges sets HasGrew/HasShrunk on nodes based on their own state
 // and their descendants' states. Returns (hasGrew, hasShrunk).
-func propagateChanges(node *model.Node) (bool, bool) {
+func propagateChanges(node *model.Node, counter *int64) (bool, bool) {
+	yieldIfNeeded(counter)
 	// Check if this node itself grew or shrunk
 	ownGrew := node.IsNew || node.SizeChange() > 0
 	ownShrunk := node.IsDeleted || node.SizeChange() < 0
@@ -61,7 +77,7 @@ func propagateChanges(node *model.Node) (bool, bool) {
 	childGrew := false
 	childShrunk := false
 	for _, child := range node.Children {
-		g, s := propagateChanges(child)
+		g, s := propagateChanges(child, counter)
 		if g {
 			childGrew = true
 		}

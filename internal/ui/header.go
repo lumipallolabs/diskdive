@@ -71,6 +71,12 @@ func (h Header) Update(msg tea.Msg) (Header, tea.Cmd) {
 
 // View renders the header
 func (h Header) View() string {
+	// App name with style
+	appName := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#C084FC")). // soft violet
+		Bold(true).
+		Render("DISKDIVE")
+
 	// Drive tabs
 	var tabs []string
 	for i, d := range h.drives {
@@ -102,15 +108,17 @@ func (h Header) View() string {
 		}
 	}
 
-	// Layout: tabs on left, stats on right
+	// Layout: app name, tabs on left, stats on right
+	appNameWidth := lipgloss.Width(appName)
 	tabsWidth := lipgloss.Width(driveTabs)
 	statsWidth := lipgloss.Width(stats)
-	gap := h.width - tabsWidth - statsWidth - 2 // -2 for HeaderStyle padding
+	gap := h.width - appNameWidth - tabsWidth - statsWidth - 4 // -4 for padding and separators
 	if gap < 1 {
 		gap = 1
 	}
 
-	line := driveTabs + strings.Repeat(" ", gap) + stats
+	sep := lipgloss.NewStyle().Foreground(lipgloss.Color("#4A5568")).Render(" │ ")
+	line := appName + sep + driveTabs + strings.Repeat(" ", gap) + stats
 
 	return HeaderStyle.Render(line)
 }
