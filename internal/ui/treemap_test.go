@@ -95,8 +95,10 @@ func TestTreemapLayout(t *testing.T) {
 	t.Logf("Generated %d blocks", len(panel.blocks))
 
 	// Check all blocks are within bounds
-	contentW := panel.width - 3 // treemapBorderH + treemapPadding
-	contentH := panel.height - 2
+	// Must match layout(): contentW = width - treemapBorderH - treemapPadding (2 + 0)
+	//                      contentH = height - treemapBorderV (0)
+	contentW := panel.width - 2
+	contentH := panel.height
 
 	for i, block := range panel.blocks {
 		name := "grouped"
@@ -239,8 +241,8 @@ func TestTreemapWithRealData(t *testing.T) {
 
 	t.Logf("Generated %d blocks", len(panel.blocks))
 
-	contentW := panel.width - 3 // treemapBorderH + treemapPadding
-	contentH := panel.height - 2
+	contentW := panel.width - 2  // treemapBorderH + treemapPadding
+	contentH := panel.height     // treemapBorderV = 0
 
 	t.Logf("Content area: %dx%d = %d chars", contentW, contentH, contentW*contentH)
 
@@ -290,8 +292,8 @@ func TestTreemapBlocksTile(t *testing.T) {
 		t.Fatalf("Expected 3 blocks, got %d", len(panel.blocks))
 	}
 
-	contentW := panel.width - 3 // treemapBorderH + treemapPadding
-	contentH := panel.height - 2
+	contentW := panel.width - 2  // treemapBorderH + treemapPadding
+	contentH := panel.height     // treemapBorderV = 0
 
 	t.Logf("Content area: %dx%d", contentW, contentH)
 

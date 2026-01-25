@@ -21,6 +21,7 @@ type KeyMap struct {
 	Help         key.Binding
 	Quit         key.Binding
 	SelectDrive  key.Binding
+	OpenExplorer key.Binding
 }
 
 // DefaultKeyMap returns the default key bindings
@@ -93,6 +94,10 @@ func DefaultKeyMap() KeyMap {
 		SelectDrive: key.NewBinding(
 			key.WithKeys(" "),
 			key.WithHelp("Space", "select drive"),
+		),
+		OpenExplorer: key.NewBinding(
+			key.WithKeys("o"),
+			key.WithHelp("o", "open in file manager"),
 		),
 	}
 }

@@ -88,6 +88,7 @@ func (h HelpOverlay) View() string {
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "Enter", "Zoom into directory"))
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "Esc/⌫", "Go back / Close overlay"))
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "Space", "Select drive"))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "o", "Open in Explorer"))
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "r", "Rescan drive"))
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "d", "Toggle diff mode"))
 
@@ -149,6 +150,7 @@ func HelpBar(width int) string {
 		{"Esc", "back"},
 		{"Tab", "panel"},
 		{"Space", "drives"},
+		{"o", "open"},
 		{"?", "help"},
 		{"q", "quit"},
 	}

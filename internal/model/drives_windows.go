@@ -12,6 +12,10 @@ var (
 	getDiskFreeSpaceExW = kernel32.NewProc("GetDiskFreeSpaceExW")
 )
 
+func getPlatformDrives() ([]Drive, error) {
+	return getWindowsDrives()
+}
+
 func getDiskSpace(path string) (total, free int64) {
 	pathPtr, _ := syscall.UTF16PtrFromString(path)
 

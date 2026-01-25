@@ -28,7 +28,7 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 
 	// Verify file exists
-	files, _ := filepath.Glob(filepath.Join(tmp, "C_*.json"))
+	files, _ := filepath.Glob(filepath.Join(tmp, "C_*.gob.gz"))
 	if len(files) == 0 {
 		t.Fatal("no cache file created")
 	}

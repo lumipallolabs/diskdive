@@ -170,6 +170,38 @@ func (t *TreePanel) GoToBottom() {
 	t.ensureVisible()
 }
 
+// ExpandTo expands the tree to show and select a specific node
+func (t *TreePanel) ExpandTo(node *model.Node) {
+	if node == nil {
+		return
+	}
+
+	// Build path from root to node
+	var path []*model.Node
+	for n := node; n != nil; n = n.Parent {
+		path = append([]*model.Node{n}, path...)
+	}
+
+	// Expand each ancestor
+	for _, n := range path {
+		if n.IsDir {
+			t.expanded[n.Path] = true
+		}
+	}
+
+	// Update visible list
+	t.updateVisible()
+
+	// Find and select the node
+	for i, n := range t.visible {
+		if n == node {
+			t.cursor = i
+			t.ensureVisible()
+			break
+		}
+	}
+}
+
 func (t *TreePanel) ensureVisible() {
 	if t.cursor < t.offset {
 		t.offset = t.cursor
@@ -357,6 +389,9 @@ func (t TreePanel) View() string {
 		var itemStyle lipgloss.Style
 		if i == t.cursor && t.focused {
 			itemStyle = TreeItemSelected.Width(t.width - 2)
+		} else if i == t.cursor && !t.focused {
+			// Show dimmer selection when unfocused
+			itemStyle = TreeItemSelectedUnfocused.Width(t.width - 2)
 		} else if t.showDiff && node.IsNew {
 			// Entirely new item (yellow)
 			itemStyle = lipgloss.NewStyle().Foreground(ColorNew).Width(t.width - 2)

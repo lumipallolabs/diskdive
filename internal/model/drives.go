@@ -30,10 +30,7 @@ func (d Drive) UsedPercent() float64 {
 
 // GetDrives returns all available drives on the system
 func GetDrives() ([]Drive, error) {
-	if runtime.GOOS != "windows" {
-		return getUnixMounts()
-	}
-	return getWindowsDrives()
+	return getPlatformDrives()
 }
 
 func getWindowsDrives() ([]Drive, error) {
@@ -64,9 +61,13 @@ func getWindowsDrives() ([]Drive, error) {
 }
 
 func getUnixMounts() ([]Drive, error) {
-	// Placeholder for future Linux/macOS support
+	// Placeholder for future Linux support
 	// For now, just return root
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		home = "/"
+	}
 	return []Drive{
-		{Letter: "/", Path: "/", Label: "root"},
+		{Letter: runtime.GOOS, Path: home, Label: home},
 	}, nil
 }

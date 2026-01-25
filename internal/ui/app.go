@@ -234,7 +234,9 @@ func (a App) Init() tea.Cmd {
 func (a App) startScan(path string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
+		debugLog.Printf("[UI] Starting scan of %s", path)
 		root, err := a.scanner.Scan(ctx, path)
+		debugLog.Printf("[UI] Scan completed, returning scanCompleteMsg (err=%v)", err)
 		return scanCompleteMsg{root: root, err: err}
 	}
 }
@@ -268,22 +270,29 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case scanCompleteMsg:
+		debugLog.Printf("[UI] Received scanCompleteMsg (err=%v)", msg.err)
 		if msg.err != nil {
 			a.scanning = false
 			a.scanPhase = phaseDone
 			a.err = msg.err
 			a.header.SetScanning(false, "")
+			debugLog.Printf("[UI] Scan failed with error: %v", msg.err)
 			return a, nil
 		}
 		// Move to computing sizes phase
+		debugLog.Printf("[UI] Moving to computing sizes phase")
 		a.scanPhase = phaseComputingSizes
 		return a, func() tea.Msg {
 			return computeSizesMsg{root: msg.root}
 		}
 
 	case computeSizesMsg:
+		debugLog.Printf("[UI] Received computeSizesMsg")
 		return a, func() tea.Msg {
+			start := time.Now()
+			debugLog.Printf("[PHASE] Starting ComputeSizes...")
 			msg.root.ComputeSizes()
+			debugLog.Printf("[PHASE] ComputeSizes took %v", time.Since(start))
 			return computeSizesDoneMsg{root: msg.root}
 		}
 
@@ -296,10 +305,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case loadCacheMsg:
 		return a, func() tea.Msg {
+			start := time.Now()
 			var prev *model.Node
 			if drive := a.header.Selected(); drive != nil {
 				prev, _ = a.cache.LoadLatest(drive.Letter)
 			}
+			debugLog.Printf("[PHASE] LoadCache took %v", time.Since(start))
 			return loadCacheDoneMsg{root: msg.root, prev: prev}
 		}
 
@@ -313,27 +324,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case applyDiffMsg:
 		return a, func() tea.Msg {
+			start := time.Now()
 			cache.ApplyDiff(msg.root, msg.prev)
+			debugLog.Printf("[PHASE] ApplyDiff took %v", time.Since(start))
 			return applyDiffDoneMsg{root: msg.root}
 		}
 
 	case applyDiffDoneMsg:
-		// Move to save phase
-		a.scanPhase = phaseSavingCache
-		return a, func() tea.Msg {
-			return saveCacheMsg{root: msg.root}
-		}
-
-	case saveCacheMsg:
-		return a, func() tea.Msg {
-			if drive := a.header.Selected(); drive != nil {
-				_ = a.cache.Save(drive.Letter, msg.root)
-			}
-			return saveCacheDoneMsg{root: msg.root}
-		}
-
-	case saveCacheDoneMsg:
-		// All done!
+		debugLog.Printf("[UI] Diff complete, showing data to user (cache save in background)")
+		// Show data immediately, save cache in background
 		a.scanning = false
 		a.scanPhase = phaseDone
 		a.root = msg.root
@@ -347,6 +346,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Recalculate layout now that we have data (tree width depends on content)
 		a.updateLayout()
 
+		// Save cache in background (don't block UI)
+		go func() {
+			start := time.Now()
+			if drive := a.header.Selected(); drive != nil {
+				_ = a.cache.Save(drive.Letter, msg.root)
+			}
+			debugLog.Printf("[PHASE] SaveCache (background) took %v", time.Since(start))
+		}()
+
+		debugLog.Printf("[UI] UI ready, showing data")
 		return a, nil
 
 	case scanProgressMsg:
@@ -425,7 +434,7 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.activePanel = PanelTreemap
 			a.tree.SetFocused(false)
 			a.treemap.SetFocused(true)
-			a.syncSelectionFromTreemap()
+			a.treemap.SelectFirst()
 		} else {
 			a.activePanel = PanelTree
 			a.tree.SetFocused(true)
@@ -505,6 +514,11 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, a.keys.Enter):
 		if a.activePanel == PanelTreemap {
 			a.treemap.ZoomIn()
+			// Sync tree to match treemap selection
+			if node := a.treemap.Selected(); node != nil {
+				a.tree.ExpandTo(node)
+				a.updateLayout()
+			}
 		} else {
 			// Toggle expand/collapse in tree view
 			a.tree.Toggle()
@@ -540,6 +554,9 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return a, nil
+
+	case key.Matches(msg, a.keys.OpenExplorer):
+		return a, a.openInExplorer()
 	}
 
 	return a, nil
@@ -595,6 +612,24 @@ func (a *App) syncSelection() tea.Cmd {
 func (a *App) syncSelectionFromTreemap() {
 	// Note: We don't expand tree to match treemap selection
 	// as that could be jarring. The treemap shows what's selected.
+}
+
+// openInExplorer opens the selected directory in the system file manager
+func (a *App) openInExplorer() tea.Cmd {
+	node := a.tree.Selected()
+	if node == nil {
+		return nil
+	}
+
+	path := node.Path
+	// If it's a file, open its parent directory
+	if !node.IsDir && node.Parent != nil {
+		path = node.Parent.Path
+	}
+
+	// Open in file manager (platform-specific implementation)
+	_ = openInFileManager(path)
+	return nil
 }
 
 // updateLayout calculates component sizes based on window dimensions

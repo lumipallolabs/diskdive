@@ -117,6 +117,16 @@ func (t TreemapPanel) Selected() *model.Node {
 	return t.selected
 }
 
+// SelectFirst selects the first non-grouped block
+func (t *TreemapPanel) SelectFirst() {
+	for i := range t.blocks {
+		if !t.blocks[i].IsGrouped && t.blocks[i].Node != nil {
+			t.selected = t.blocks[i].Node
+			return
+		}
+	}
+}
+
 // ZoomIn focuses on the selected folder
 func (t *TreemapPanel) ZoomIn() {
 	if t.selected != nil && t.selected.IsDir && len(t.selected.Children) > 0 {
@@ -135,23 +145,26 @@ func (t *TreemapPanel) ZoomOut() {
 
 // MoveToBlock moves selection to an adjacent block
 func (t *TreemapPanel) MoveToBlock(dx, dy int) {
-	if len(t.blocks) == 0 || t.selected == nil {
+	if len(t.blocks) == 0 {
 		return
 	}
 
 	// Find current block
 	var currentBlock *Block
 	for i := range t.blocks {
-		if t.blocks[i].Node == t.selected {
+		if !t.blocks[i].IsGrouped && t.blocks[i].Node == t.selected {
 			currentBlock = &t.blocks[i]
 			break
 		}
 	}
 
 	if currentBlock == nil {
-		// Select first block if no current selection in view
-		if len(t.blocks) > 0 {
-			t.selected = t.blocks[0].Node
+		// Select first non-grouped block if no current selection in view
+		for i := range t.blocks {
+			if !t.blocks[i].IsGrouped && t.blocks[i].Node != nil {
+				t.selected = t.blocks[i].Node
+				return
+			}
 		}
 		return
 	}
@@ -166,7 +179,8 @@ func (t *TreemapPanel) MoveToBlock(dx, dy int) {
 
 	for i := range t.blocks {
 		block := &t.blocks[i]
-		if block.Node == t.selected {
+		// Skip grouped blocks and current selection
+		if block.IsGrouped || block.Node == nil || block.Node == t.selected {
 			continue
 		}
 
@@ -197,7 +211,7 @@ func (t *TreemapPanel) MoveToBlock(dx, dy int) {
 		}
 	}
 
-	if bestBlock != nil {
+	if bestBlock != nil && bestBlock.Node != nil {
 		t.selected = bestBlock.Node
 	}
 }
@@ -234,10 +248,10 @@ const (
 	minBlockHeight  = 3  // minimum height for any block (border + 1 line text)
 	maxVisibleItems = 15 // max items before grouping remainder into "N more"
 
-	// Layout constants for treemap panel (no left border - shares with tree panel)
-	treemapBorderH = 1 // right border only (left shared with tree)
-	treemapPadding = 2 // 1 char padding on each side
-	treemapBorderV = 2 // top + bottom border
+	// Layout constants for treemap panel (no outer border - blocks have their own)
+	treemapBorderH = 2 // margin for rightmost block borders
+	treemapPadding = 0 // no padding
+	treemapBorderV = 0 // no vertical margin needed
 )
 
 // layout calculates block positions using the squarify library
@@ -451,10 +465,11 @@ func (t *TreemapPanel) layout() {
 			continue
 		}
 
-		// Convert float to int using floor for start, round for end Y (to prevent vertical gaps)
-		x := int(math.Floor(block.X))
-		y := int(math.Floor(block.Y))
-		endX := int(math.Floor(block.X + block.W))
+		// Convert float to int - use Round for all to get consistent boundaries
+		// This prevents adjacent blocks from overlapping (one's border overwriting another's)
+		x := int(math.Round(block.X))
+		y := int(math.Round(block.Y))
+		endX := int(math.Round(block.X + block.W))
 		endY := int(math.Round(block.Y + block.H))
 		w := endX - x
 		h := endY - y
@@ -531,8 +546,8 @@ func (t *TreemapPanel) View() string {
 		return t.cachedView
 	}
 
-	// Content dimensions (accounting for border and padding)
-	contentW := t.width - treemapBorderH - treemapPadding
+	// Content dimensions
+	contentW := t.width - treemapBorderH
 	contentH := t.height - treemapBorderV
 	if contentW < 1 {
 		contentW = 1
@@ -541,63 +556,66 @@ func (t *TreemapPanel) View() string {
 		contentH = 1
 	}
 
-	// Create a 2D grid with style indices instead of full styles
-	grid := make([][]rune, contentH)
-	styleIdx := make([][]int, contentH)
-	for i := range grid {
-		grid[i] = make([]rune, contentW)
-		styleIdx[i] = make([]int, contentW)
-		for j := range grid[i] {
-			grid[i][j] = ' '
-			styleIdx[i][j] = 0 // 0 = empty/default
-		}
+	// Render each block completely using lipgloss, then composite line by line
+	type renderedBlock struct {
+		block Block
+		lines []string
 	}
 
-	// Collect styles used - index 0 is reserved for empty
-	styles := []lipgloss.Style{lipgloss.NewStyle()}
-
-	// Draw blocks (with bounds validation)
+	var rendered []renderedBlock
 	for _, block := range t.blocks {
-		// Ensure block is within bounds (defensive)
-		if block.X < 0 || block.Y < 0 ||
-			block.X+block.Width > contentW ||
-			block.Y+block.Height > contentH {
-			// Skip invalid blocks
+		if block.Width < 1 || block.Height < 1 {
 			continue
 		}
-		t.drawBlockIndexed(grid, styleIdx, &styles, block, contentW, contentH)
+		blockStr := t.renderBlock(block)
+		lines := strings.Split(blockStr, "\n")
+		rendered = append(rendered, renderedBlock{block, lines})
 	}
 
-	// Render grid to string - batch by style index
-	var lines []string
+	// Build output line by line
+	var outputLines []string
 	for y := 0; y < contentH; y++ {
-		var line strings.Builder
-		x := 0
-		for x < contentW {
-			// Find run of cells with same style index
-			currentIdx := styleIdx[y][x]
-			var run strings.Builder
-			for x < contentW && styleIdx[y][x] == currentIdx {
-				run.WriteRune(grid[y][x])
-				x++
-			}
-			line.WriteString(styles[currentIdx].Render(run.String()))
+		// Find all blocks that have content at this row and sort by X
+		type blockSegment struct {
+			x     int
+			width int
+			line  string
 		}
-		lines = append(lines, line.String())
+		var segments []blockSegment
+
+		for _, rb := range rendered {
+			// Check if this block has content at row y
+			lineIdx := y - rb.block.Y
+			if lineIdx >= 0 && lineIdx < len(rb.lines) && lineIdx < rb.block.Height {
+				segments = append(segments, blockSegment{
+					x:     rb.block.X,
+					width: rb.block.Width,
+					line:  rb.lines[lineIdx],
+				})
+			}
+		}
+
+		// Sort segments by X position
+		sort.Slice(segments, func(i, j int) bool {
+			return segments[i].x < segments[j].x
+		})
+
+		// Build the line by placing segments with padding between them
+		var lineBuilder strings.Builder
+		currentX := 0
+		for _, seg := range segments {
+			// Add padding to reach this segment's X position
+			if seg.x > currentX {
+				lineBuilder.WriteString(strings.Repeat(" ", seg.x-currentX))
+			}
+			lineBuilder.WriteString(seg.line)
+			currentX = seg.x + seg.width
+		}
+		outputLines = append(outputLines, lineBuilder.String())
 	}
 
-	content := strings.Join(lines, "\n")
-
-	// Apply border - no left border (shares with tree panel)
-	// Set Height to match tree panel (which uses Height(t.height))
-	style := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorBorder).
-		BorderLeft(false).
-		Height(t.height)
-	if t.focused {
-		style = style.BorderForeground(ColorPrimary)
-	}
+	content := strings.Join(outputLines, "\n")
+	style := lipgloss.NewStyle().Height(t.height)
 
 	// Cache the result
 	t.cachedView = style.Render(content)
@@ -610,7 +628,100 @@ func (t *TreemapPanel) View() string {
 	return t.cachedView
 }
 
-// drawBlock draws a single block onto the grid
+// renderBlock renders a complete block using lipgloss and returns the styled string
+func (t TreemapPanel) renderBlock(block Block) string {
+	// Determine colors
+	var bgColor, fgColor, borderColor lipgloss.Color
+
+	if block.IsGrouped {
+		bgColor = lipgloss.Color("#3D3D3D")
+		fgColor = lipgloss.Color("#9CA3AF")
+		borderColor = lipgloss.Color("#4B5563")
+	} else if t.showDiff && block.Node != nil {
+		if block.Node.IsNew {
+			bgColor = ColorNew
+			fgColor = lipgloss.Color("#000000")
+			borderColor = ColorNew
+		} else if block.Node.IsDir && block.Node.HasGrew && block.Node.HasShrunk {
+			bgColor = ColorMixedBg
+			fgColor = ColorMixed
+			borderColor = ColorMixed
+		} else if block.Node.HasGrew {
+			bgColor = ColorGrewBg
+			fgColor = ColorGrew
+			borderColor = ColorGrew
+		} else if block.Node.HasShrunk {
+			bgColor = ColorShrunkBg
+			fgColor = ColorShrunk
+			borderColor = ColorShrunk
+		} else {
+			bgColor = lipgloss.Color("#2D2D2D")
+			fgColor = lipgloss.Color("#9CA3AF")
+			borderColor = lipgloss.Color("#4B5563")
+		}
+	} else {
+		if block.Node != nil && block.Node.IsDir {
+			bgColor = lipgloss.Color("#1E3A5F")
+			fgColor = ColorDir
+			borderColor = lipgloss.Color("#4B5563")
+		} else {
+			bgColor = lipgloss.Color("#2D2D2D")
+			fgColor = ColorFile
+			borderColor = lipgloss.Color("#4B5563")
+		}
+	}
+
+	isSelected := block.Node == t.selected && t.focused
+	if isSelected {
+		bgColor = ColorPrimary
+		fgColor = lipgloss.Color("#FFFFFF")
+		borderColor = lipgloss.Color("#FFFFFF")
+	}
+
+	// Build label
+	var label, sizeStr string
+	if block.IsGrouped {
+		label = fmt.Sprintf("%d more", block.GroupCount)
+		sizeStr = FormatSize(block.GroupSize)
+	} else if block.Node != nil {
+		label = block.Node.Name
+		sizeStr = FormatSize(block.Node.TotalSize())
+	}
+
+	// Inner dimensions (excluding border)
+	innerW := block.Width - 2
+	innerH := block.Height - 2
+	if innerW < 0 {
+		innerW = 0
+	}
+	if innerH < 0 {
+		innerH = 0
+	}
+
+	// Build content text
+	text := label
+	if innerH > 1 && sizeStr != "" {
+		text = label + "\n" + sizeStr
+	}
+
+	// Render the block with border using lipgloss
+	blockStyle := lipgloss.NewStyle().
+		Width(innerW).
+		Height(innerH).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		BorderBackground(bgColor).
+		Background(bgColor).
+		Foreground(fgColor)
+
+	if isSelected {
+		blockStyle = blockStyle.Bold(true)
+	}
+
+	return blockStyle.Render(text)
+}
+
+// drawBlock draws a single block onto the grid (legacy)
 func (t TreemapPanel) drawBlock(grid [][]rune, colors [][]lipgloss.Style, block Block, gridW, gridH int) {
 	if block.Width < 1 || block.Height < 1 {
 		return
@@ -830,24 +941,27 @@ func (t TreemapPanel) drawBlockIndexed(grid [][]rune, styleIdx [][]int, styles *
 	borderIdx := len(*styles)
 	*styles = append(*styles, borderStyle)
 
-	// Fill block area
+	// Fill block area - but don't overwrite existing border characters
+	isBorder := func(ch rune) bool {
+		return ch == '\u2500' || ch == '\u2502' || ch == '\u250C' || ch == '\u2510' || ch == '\u2514' || ch == '\u2518'
+	}
 	for y := block.Y; y < block.Y+block.Height && y < gridH; y++ {
 		for x := block.X; x < block.X+block.Width && x < gridW; x++ {
-			if y >= 0 && x >= 0 {
+			if y >= 0 && x >= 0 && !isBorder(grid[y][x]) {
 				grid[y][x] = ' '
 				styleIdx[y][x] = blockIdx
 			}
 		}
 	}
 
-	// Draw border
+	// Draw border - only if cell is empty (don't overwrite adjacent block's border)
 	for x := block.X; x < block.X+block.Width && x < gridW; x++ {
 		if x >= 0 {
-			if block.Y >= 0 && block.Y < gridH {
+			if block.Y >= 0 && block.Y < gridH && grid[block.Y][x] == ' ' {
 				grid[block.Y][x] = '\u2500'
 				styleIdx[block.Y][x] = borderIdx
 			}
-			if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH {
+			if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH && grid[block.Y+block.Height-1][x] == ' ' {
 				grid[block.Y+block.Height-1][x] = '\u2500'
 				styleIdx[block.Y+block.Height-1][x] = borderIdx
 			}
@@ -856,31 +970,31 @@ func (t TreemapPanel) drawBlockIndexed(grid [][]rune, styleIdx [][]int, styles *
 
 	for y := block.Y; y < block.Y+block.Height && y < gridH; y++ {
 		if y >= 0 {
-			if block.X >= 0 && block.X < gridW {
+			if block.X >= 0 && block.X < gridW && grid[y][block.X] == ' ' {
 				grid[y][block.X] = '\u2502'
 				styleIdx[y][block.X] = borderIdx
 			}
-			if block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW {
+			if block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW && grid[y][block.X+block.Width-1] == ' ' {
 				grid[y][block.X+block.Width-1] = '\u2502'
 				styleIdx[y][block.X+block.Width-1] = borderIdx
 			}
 		}
 	}
 
-	// Corners
-	if block.Y >= 0 && block.Y < gridH && block.X >= 0 && block.X < gridW {
+	// Corners - only if cell is empty
+	if block.Y >= 0 && block.Y < gridH && block.X >= 0 && block.X < gridW && grid[block.Y][block.X] == ' ' {
 		grid[block.Y][block.X] = '\u250C'
 		styleIdx[block.Y][block.X] = borderIdx
 	}
-	if block.Y >= 0 && block.Y < gridH && block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW {
+	if block.Y >= 0 && block.Y < gridH && block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW && grid[block.Y][block.X+block.Width-1] == ' ' {
 		grid[block.Y][block.X+block.Width-1] = '\u2510'
 		styleIdx[block.Y][block.X+block.Width-1] = borderIdx
 	}
-	if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH && block.X >= 0 && block.X < gridW {
+	if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH && block.X >= 0 && block.X < gridW && grid[block.Y+block.Height-1][block.X] == ' ' {
 		grid[block.Y+block.Height-1][block.X] = '\u2514'
 		styleIdx[block.Y+block.Height-1][block.X] = borderIdx
 	}
-	if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH && block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW {
+	if block.Y+block.Height-1 >= 0 && block.Y+block.Height-1 < gridH && block.X+block.Width-1 >= 0 && block.X+block.Width-1 < gridW && grid[block.Y+block.Height-1][block.X+block.Width-1] == ' ' {
 		grid[block.Y+block.Height-1][block.X+block.Width-1] = '\u2518'
 		styleIdx[block.Y+block.Height-1][block.X+block.Width-1] = borderIdx
 	}

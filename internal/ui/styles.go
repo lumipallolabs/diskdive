@@ -66,6 +66,10 @@ var (
 				Foreground(lipgloss.Color("#FFFFFF")).
 				Bold(true)
 
+	TreeItemSelectedUnfocused = lipgloss.NewStyle().
+					Background(lipgloss.Color("#4A5568")).
+					Foreground(lipgloss.Color("#FFFFFF"))
+
 	TreeSizeBar = lipgloss.NewStyle().
 			Foreground(ColorPrimary)
 
