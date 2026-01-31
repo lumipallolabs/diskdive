@@ -4,7 +4,7 @@ set -e
 # Configuration
 APP_NAME="DiskDive"
 BINARY_NAME="diskdive"
-ICON_PNG="icon.png"
+ICON_PNG="assets/icon.png"
 BUNDLE_ID="com.lumipallolabs.diskdive"
 
 # Read version from VERSION file (single source of truth)

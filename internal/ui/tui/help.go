@@ -75,7 +75,7 @@ func (h HelpOverlay) View() string {
 	versionStyle := lipgloss.NewStyle().
 		Foreground(ColorMuted)
 
-	content.WriteString(nameStyle.Render("DISKDIVE"))
+	content.WriteString(nameStyle.Render("DiskDive"))
 	if h.version != "" {
 		content.WriteString(versionStyle.Render(" " + h.version))
 	}

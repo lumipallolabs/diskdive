@@ -1,9 +1,21 @@
-*.exe
+# Binary
 diskdive
-*.exe~
-debug.log
-scanner.log
+*.exe
+
+# Backup files
+*~
+
+# Build artifacts
 build/
-.DS_Store
+
+# Logs
+*.log
+
+# Environment
 .env
-docs/internal/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/

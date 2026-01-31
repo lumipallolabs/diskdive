@@ -93,7 +93,7 @@ func (h Header) Update(msg tea.Msg) (Header, tea.Cmd) {
 }
 
 // View renders the header (2 lines + separator)
-// Line 1: DISKDIVE 0.1.4                     Used: X / Y [bar] XX%
+// Line 1: DiskDive 0.1.4                     Used: X / Y [bar] XX%
 // Line 2: Drive: Name [space]               Freed: X session | Y total
 // Line 3: ─────────────────────────────────────────────────────────
 func (h Header) View() string {
@@ -113,7 +113,7 @@ func (h Header) View() string {
 		Foreground(lipgloss.Color("#6B7280")) // lighter gray for empty
 
 	// === LINE 1: App name (left) | Free space stats (right) ===
-	appName := nameStyle.Render("DISKDIVE") + versionStyle.Render(" "+h.version)
+	appName := nameStyle.Render("DiskDive") + versionStyle.Render(" "+h.version)
 
 	var freeStats string
 	if drive := h.Selected(); drive != nil {
