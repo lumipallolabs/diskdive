@@ -52,7 +52,7 @@ func getWindowsDrives() ([]Drive, error) {
 		}
 
 		// Get disk space info using syscall (Windows-specific)
-		drive.TotalBytes, drive.FreeBytes = getDiskSpace(path)
+		drive.TotalBytes, drive.FreeBytes = GetDiskSpace(path)
 
 		drives = append(drives, drive)
 	}

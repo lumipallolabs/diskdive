@@ -3,6 +3,7 @@
 package watcher
 
 import (
+	"os"
 	"sync"
 	"time"
 
@@ -88,18 +89,31 @@ func (w *Watcher) run() {
 }
 
 func (w *Watcher) handleEvent(event fsevents.Event) {
-	// Only care about deletions and renames (move to Trash is a rename)
-	if event.Flags&fsevents.ItemRemoved == 0 && event.Flags&fsevents.ItemRenamed == 0 {
-		return
-	}
-
 	path := event.Path
 	if len(path) > 0 && path[0] != '/' {
 		path = "/" + path
 	}
 
+	var eventType EventType
+	if event.Flags&fsevents.ItemRemoved != 0 {
+		eventType = EventDeleted
+	} else if event.Flags&fsevents.ItemRenamed != 0 {
+		// Rename could be move-in or move-out - check if path exists
+		if _, err := os.Stat(path); err != nil {
+			eventType = EventDeleted // Path gone = moved out
+		} else {
+			eventType = EventCreated // Path exists = moved in or renamed
+		}
+	} else if event.Flags&fsevents.ItemCreated != 0 {
+		eventType = EventCreated
+	} else if event.Flags&fsevents.ItemModified != 0 {
+		eventType = EventModified
+	} else {
+		return
+	}
+
 	select {
-	case w.eventCh <- Event{Type: EventDeleted, Path: path}:
+	case w.eventCh <- Event{Type: eventType, Path: path}:
 	default:
 	}
 }

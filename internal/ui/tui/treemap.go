@@ -31,7 +31,6 @@ type TreemapPanel struct {
 	width    int
 	height   int
 	focused  bool
-	showDiff bool
 
 	// Render cache
 	cachedView     string
@@ -39,7 +38,6 @@ type TreemapPanel struct {
 	cachedFocus    *model.Node
 	cachedSelected *model.Node
 	cachedFocused  bool
-	cachedShowDiff bool
 }
 
 // NewTreemapPanel creates a new treemap panel
@@ -70,9 +68,9 @@ func (t *TreemapPanel) SetFocused(focused bool) {
 	t.focused = focused
 }
 
-// SetShowDiff enables/disables diff display
-func (t *TreemapPanel) SetShowDiff(show bool) {
-	t.showDiff = show
+// InvalidateCache marks the render cache as invalid
+func (t *TreemapPanel) InvalidateCache() {
+	t.cacheValid = false
 }
 
 // SetFocus sets the focus node (what to display in treemap)
@@ -520,8 +518,7 @@ func (t *TreemapPanel) View() string {
 	if t.cacheValid &&
 		t.cachedFocus == t.focus &&
 		t.cachedSelected == t.selected &&
-		t.cachedFocused == t.focused &&
-		t.cachedShowDiff == t.showDiff {
+		t.cachedFocused == t.focused {
 		return t.cachedView
 	}
 
@@ -602,7 +599,6 @@ func (t *TreemapPanel) View() string {
 	t.cachedFocus = t.focus
 	t.cachedSelected = t.selected
 	t.cachedFocused = t.focused
-	t.cachedShowDiff = t.showDiff
 
 	return t.cachedView
 }
@@ -615,7 +611,7 @@ func (t TreemapPanel) renderBlock(block Block) string {
 	if block.IsGrouped {
 		fgColor = lipgloss.Color("#6B7280")
 		borderColor = lipgloss.Color("#4B5563")
-	} else if t.showDiff && block.Node != nil && block.Node.IsDeleted {
+	} else if block.Node != nil && block.Node.IsDeleted {
 		// Deleted items shown in muted gray
 		fgColor = lipgloss.Color("#6B7280")
 		borderColor = lipgloss.Color("#374151")

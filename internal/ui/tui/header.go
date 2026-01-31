@@ -70,6 +70,13 @@ func (h *Header) SetFreedStats(session, total int64) {
 	h.freedTotal = total
 }
 
+// UpdateDiskFree updates the free disk space for the selected drive
+func (h *Header) UpdateDiskFree(freeBytes int64) {
+	if h.selected >= 0 && h.selected < len(h.drives) {
+		h.drives[h.selected].FreeBytes = freeBytes
+	}
+}
+
 // ScanProgress returns the current scan progress text
 func (h Header) ScanProgress() string {
 	return h.scanProgress

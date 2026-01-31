@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/samuli/diskdive/internal/core"
+	"github.com/samuli/diskdive/internal/logging"
 	"github.com/samuli/diskdive/internal/model"
 )
 
@@ -21,7 +21,6 @@ type TreePanel struct {
 	width    int
 	height   int
 	focused  bool
-	showDiff bool
 	offset   int // scroll offset
 }
 
@@ -55,9 +54,19 @@ func (t *TreePanel) SetFocused(focused bool) {
 	t.focused = focused
 }
 
-// SetShowDiff enables/disables diff display
-func (t *TreePanel) SetShowDiff(show bool) {
-	t.showDiff = show
+// RefreshVisible refreshes the visible nodes list
+func (t *TreePanel) RefreshVisible() {
+	logging.Debug.Printf("[TreePanel] RefreshVisible: before=%d visible, cursor=%d", len(t.visible), t.cursor)
+	t.updateVisible()
+	// Ensure cursor stays in bounds
+	if t.cursor >= len(t.visible) && len(t.visible) > 0 {
+		t.cursor = len(t.visible) - 1
+	}
+	if t.cursor < 0 {
+		t.cursor = 0
+	}
+	t.ensureVisible()
+	logging.Debug.Printf("[TreePanel] RefreshVisible: after=%d visible, cursor=%d", len(t.visible), t.cursor)
 }
 
 // Selected returns the currently selected node
@@ -215,7 +224,7 @@ func (t *TreePanel) collectVisible(node *model.Node) {
 	t.visible = append(t.visible, node)
 
 	if node.IsDir && t.expanded[node.Path] {
-		// Sort children by size
+		// Sort children by size, then by name
 		children := make([]*model.Node, len(node.Children))
 		copy(children, node.Children)
 		model.SortBySize(children)
@@ -223,6 +232,14 @@ func (t *TreePanel) collectVisible(node *model.Node) {
 		for _, child := range children {
 			t.collectVisible(child)
 		}
+	}
+}
+
+// ForceRefresh forces a complete refresh of the visible list
+func (t *TreePanel) ForceRefresh() {
+	t.visible = nil
+	if t.root != nil {
+		t.collectVisible(t.root)
 	}
 }
 
@@ -309,16 +326,14 @@ func (t TreePanel) buildLineContent(node *model.Node) lineContent {
 		sizeBar = "[" + bar.String() + "]"
 	}
 
-	// Change indicator (only show changes >= core.MinSignificantSize to filter out small OS file changes)
+	// Change indicator for deletions
 	var changeStr string
-	if t.showDiff {
-		if node.IsDeleted && node.TotalSize() >= core.MinSignificantSize {
-			// Deleted item - show its full size as freed
-			changeStr = fmt.Sprintf("-%s", FormatSize(node.TotalSize()))
-		} else if node.DeletedSize >= core.MinSignificantSize {
-			// Contains deleted children - show accumulated freed size
-			changeStr = fmt.Sprintf("-%s", FormatSize(node.DeletedSize))
-		}
+	if node.IsDeleted {
+		// Deleted item - show its full size as freed
+		changeStr = fmt.Sprintf("-%s", FormatSize(node.TotalSize()))
+	} else if node.DeletedSize > 0 {
+		// Contains deleted children - show accumulated freed size
+		changeStr = fmt.Sprintf("-%s", FormatSize(node.DeletedSize))
 	}
 
 	return lineContent{prefix, name, deletedBadge, sizeBar, size, changeStr}
@@ -335,12 +350,7 @@ func (t TreePanel) buildLine(node *model.Node) string {
 		deletedBadge = " " + DeletedBadge.Render("DEL")
 	}
 
-	changeStr := c.changeStr
-	if t.showDiff && changeStr != "" && node.IsDeleted {
-		// Deleted items show the freed size
-	}
-
-	return fmt.Sprintf("%s%s%s %s %s %s", c.prefix, c.name, deletedBadge, c.sizeBar, c.size, changeStr)
+	return fmt.Sprintf("%s%s%s %s %s %s", c.prefix, c.name, deletedBadge, c.sizeBar, c.size, c.changeStr)
 }
 
 // View renders the tree
@@ -372,8 +382,7 @@ func (t TreePanel) View() string {
 		}
 
 		changeStr := c.changeStr
-		if t.showDiff && changeStr != "" {
-			// Style the size change indicator
+		if changeStr != "" {
 			changeStr = ShrunkStyle.Render(changeStr)
 		}
 
@@ -388,10 +397,10 @@ func (t TreePanel) View() string {
 		} else if i == t.cursor && !t.focused {
 			// Show dimmer selection when unfocused
 			itemStyle = TreeItemSelectedUnfocused.Width(maxW).MaxWidth(maxW)
-		} else if t.showDiff && node.IsDeleted {
+		} else if node.IsDeleted {
 			// Deleted item - red
 			itemStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444")).MaxWidth(maxW)
-		} else if t.showDiff && node.DeletedSize > 0 {
+		} else if node.DeletedSize > 0 {
 			// Contains deleted children - purple
 			itemStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#A855F7")).MaxWidth(maxW)
 		} else if node.IsDir {

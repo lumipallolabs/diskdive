@@ -8,8 +8,8 @@ import (
 	"syscall"
 )
 
-// getDiskSpace returns disk space information for a given path using statfs
-func getDiskSpace(path string) (total, free int64) {
+// GetDiskSpace returns disk space information for a given path using statfs
+func GetDiskSpace(path string) (total, free int64) {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(path, &stat); err != nil {
 		return 0, 0
@@ -30,7 +30,7 @@ func getPlatformDrives() ([]Drive, error) {
 		Path:   "/",
 		Label:  "Macintosh HD",
 	}
-	rootDrive.TotalBytes, rootDrive.FreeBytes = getDiskSpace("/")
+	rootDrive.TotalBytes, rootDrive.FreeBytes = GetDiskSpace("/")
 	drives = append(drives, rootDrive)
 
 	// Scan /Volumes for mounted drives
@@ -66,7 +66,7 @@ func getPlatformDrives() ([]Drive, error) {
 			Path:   volumePath,
 			Label:  entry.Name(),
 		}
-		drive.TotalBytes, drive.FreeBytes = getDiskSpace(volumePath)
+		drive.TotalBytes, drive.FreeBytes = GetDiskSpace(volumePath)
 
 		// Only add if we got valid disk space info
 		if drive.TotalBytes > 0 {

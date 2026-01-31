@@ -68,9 +68,19 @@ type DeletionDetectedEvent struct {
 	Size         int64
 	SessionFreed int64
 	TotalFreed   int64
+	DiskFree     int64 // Updated free disk space
 }
 
 func (DeletionDetectedEvent) isEvent() {}
+
+// CreationDetectedEvent is emitted when a new file/folder is created
+type CreationDetectedEvent struct {
+	Path     string
+	Node     *model.Node // The newly created node
+	DiskFree int64       // Updated free disk space
+}
+
+func (CreationDetectedEvent) isEvent() {}
 
 // TreeExpandedEvent is emitted when a tree node is expanded/collapsed
 type TreeExpandedEvent struct {

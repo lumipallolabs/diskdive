@@ -10,28 +10,18 @@ import (
 // Colors - cyberpunk/neon palette
 var (
 	ColorPrimary    = lipgloss.Color("#C084FC") // soft violet
-	ColorSecondary  = lipgloss.Color("#BD93F9") // soft purple
 	ColorSuccess    = lipgloss.Color("#39FF14") // neon green
-	ColorWarning    = lipgloss.Color("#FFB86C") // orange
 	ColorDanger     = lipgloss.Color("#FF5555") // red
 	ColorMuted      = lipgloss.Color("#4A5568") // darker muted
 	ColorBorder     = lipgloss.Color("#4A5568") // border
 	ColorBackground = lipgloss.Color("#1F1F23") // dark background
 	ColorCyan       = lipgloss.Color("#00FFFF") // neon cyan
-	ColorSize       = lipgloss.Color("#39FF14") // neon green for sizes
 	ColorDir        = lipgloss.Color("#00FFFF") // cyan for directories
 	ColorFile       = lipgloss.Color("#A0A0A0") // dimmer for files
 	ColorText       = lipgloss.Color("#E4E4E7") // default text
 
-	// Change colors (warm/cool palette - colorblind friendly)
-	ColorGrew       = lipgloss.Color("#FFB86C") // orange - growth
-	ColorGrewBg     = lipgloss.Color("#7C2D12") // dark orange bg
-	ColorShrunk     = lipgloss.Color("#5EEAD4") // teal - shrinkage
-	ColorShrunkBg   = lipgloss.Color("#115E59") // dark teal bg
-	ColorNew        = lipgloss.Color("#F1FA8C") // yellow
-	ColorUnchanged  = lipgloss.Color("#6272A4") // muted purple-gray
-	ColorMixed      = lipgloss.Color("#FF79C6") // pink - folder has both grew and shrunk
-	ColorMixedBg    = lipgloss.Color("#4C1D95") // dark purple bg
+	// Deletion indicator
+	ColorShrunk = lipgloss.Color("#5EEAD4") // teal - freed space
 )
 
 // Styles
@@ -105,21 +95,14 @@ var (
 		Background(lipgloss.Color("#1E3A4C")).
 		Padding(0, 1)
 
-	// Change indicators
-	GrewStyle = lipgloss.NewStyle().
-			Foreground(ColorGrew)
+	// Help overlay key style (no background for cleaner look)
+	HelpOverlayKey = lipgloss.NewStyle().
+			Foreground(ColorCyan).
+			Padding(0, 1)
 
+	// Deletion indicators
 	ShrunkStyle = lipgloss.NewStyle().
 			Foreground(ColorShrunk)
-
-	NewBadge = lipgloss.NewStyle().
-			Background(ColorNew).
-			Foreground(lipgloss.Color("#000000")).
-			Padding(0, 1).
-			Bold(true)
-
-	DeletedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6B7280")) // muted gray
 
 	DeletedBadge = lipgloss.NewStyle().
 			Background(lipgloss.Color("#374151")). // dark gray

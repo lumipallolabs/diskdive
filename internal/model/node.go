@@ -20,6 +20,18 @@ type Node struct {
 	DeletedSize int64 `json:"-"` // total size of deleted items in this subtree
 }
 
+// AddChild adds a child node and propagates size up the tree
+func (n *Node) AddChild(child *Node) {
+	child.Parent = n
+	n.Children = append(n.Children, child)
+
+	// Propagate size up to ancestors
+	size := child.TotalSize()
+	for parent := n; parent != nil; parent = parent.Parent {
+		parent.Size += size
+	}
+}
+
 // MarkDeleted marks this node as deleted and propagates the size change up the tree
 func (n *Node) MarkDeleted() {
 	if n.IsDeleted {

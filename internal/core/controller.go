@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -12,8 +14,6 @@ import (
 	"github.com/samuli/diskdive/internal/watcher"
 )
 
-// MinSignificantSize is the minimum size for a deletion to count in freed stats
-const MinSignificantSize = 200 * 1024 // 200 KB
 
 // Controller manages the core application logic without UI dependencies
 type Controller struct {
@@ -164,12 +164,6 @@ func (c *Controller) FreedState() FreedState {
 }
 
 // IsShowingDiff returns whether diff mode is enabled
-func (c *Controller) IsShowingDiff() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.tree.ShowDiff
-}
-
 // SelectDrive selects a drive by index and prepares for scanning
 func (c *Controller) SelectDrive(idx int) error {
 	c.mu.Lock()
@@ -300,14 +294,6 @@ func (c *Controller) FinalizeScan() {
 	c.scan.Phase = PhaseIdle
 }
 
-// ToggleDiff toggles diff display mode
-func (c *Controller) ToggleDiff() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.tree.ShowDiff = !c.tree.ShowDiff
-	return c.tree.ShowDiff
-}
-
 // StartWatching starts the filesystem watcher for the current scan root
 func (c *Controller) StartWatching() (<-chan Event, error) {
 	c.mu.Lock()
@@ -358,11 +344,51 @@ func (c *Controller) StartWatching() (<-chan Event, error) {
 func (c *Controller) watchLoop(w *watcher.Watcher, root *model.Node, eventCh chan Event) {
 	defer close(eventCh)
 
-	for event := range w.Events() {
-		if event.Type == watcher.EventDeleted {
-			c.handleDeletion(event.Path, root, eventCh)
+	// Track directories needing rescan (debounced)
+	pendingDirs := make(map[string]bool)
+	var debounceTimer *time.Timer
+	const debounceDelay = 1500 * time.Millisecond
+
+	flushPending := func() {
+		if len(pendingDirs) == 0 {
+			return
+		}
+
+		// Find topmost directories (remove children if parent is in set)
+		toScan := c.findTopmostDirs(pendingDirs)
+		pendingDirs = make(map[string]bool)
+
+		// Scan each directory
+		for _, dir := range toScan {
+			c.rescanDirectory(dir, root, eventCh)
 		}
 	}
+
+	for event := range w.Events() {
+		switch event.Type {
+		case watcher.EventDeleted:
+			c.handleDeletion(event.Path, root, eventCh)
+
+		case watcher.EventCreated:
+			// Add parent directory to pending set
+			parentDir := filepath.Dir(event.Path)
+			if c.findNodeByPath(root, parentDir) != nil {
+				pendingDirs[parentDir] = true
+			}
+
+			// Reset debounce timer
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			debounceTimer = time.AfterFunc(debounceDelay, flushPending)
+		}
+	}
+
+	// Flush any remaining on shutdown
+	if debounceTimer != nil {
+		debounceTimer.Stop()
+	}
+	flushPending()
 }
 
 // handleDeletion processes a deletion event
@@ -379,28 +405,137 @@ func (c *Controller) handleDeletion(path string, root *model.Node, eventCh chan 
 
 	size := node.TotalSize()
 	node.MarkDeleted()
-	logging.Debug.Printf("Watcher: MARKED DELETED: %s (size: %d)", path, size)
+	logging.Debug.Printf("Watcher: MARKED DELETED: %s (size: %d, isDir: %v)", path, size, node.IsDir)
 
-	if size >= MinSignificantSize {
-		c.mu.Lock()
-		c.freed.Session += size
-		c.freed.Lifetime += size
-		if c.statsManager != nil {
-			c.statsManager.AddFreed(size)
-		}
-		freed := c.freed
-		c.mu.Unlock()
-
-		eventCh <- DeletionDetectedEvent{
-			Path:         path,
-			Size:         size,
-			SessionFreed: freed.Session,
-			TotalFreed:   freed.Lifetime,
-		}
-
-		logging.Debug.Printf("Watcher: freed %d bytes (session: %d, lifetime: %d)",
-			size, freed.Session, freed.Lifetime)
+	c.mu.Lock()
+	c.freed.Session += size
+	c.freed.Lifetime += size
+	if c.statsManager != nil {
+		c.statsManager.AddFreed(size)
 	}
+	freed := c.freed
+	diskFree := c.getDiskFree()
+	c.mu.Unlock()
+
+	eventCh <- DeletionDetectedEvent{
+		Path:         path,
+		Size:         size,
+		SessionFreed: freed.Session,
+		TotalFreed:   freed.Lifetime,
+		DiskFree:     diskFree,
+	}
+
+	logging.Debug.Printf("Watcher: freed %d bytes (session: %d, lifetime: %d)",
+		size, freed.Session, freed.Lifetime)
+}
+
+// findTopmostDirs returns directories that don't have a parent in the set
+func (c *Controller) findTopmostDirs(dirs map[string]bool) []string {
+	var result []string
+	for dir := range dirs {
+		hasParentInSet := false
+		parent := filepath.Dir(dir)
+		for parent != dir {
+			if dirs[parent] {
+				hasParentInSet = true
+				break
+			}
+			dir2 := filepath.Dir(parent)
+			if dir2 == parent {
+				break
+			}
+			parent = dir2
+		}
+		if !hasParentInSet {
+			result = append(result, dir)
+		}
+	}
+	return result
+}
+
+// rescanDirectory rescans a directory and updates the tree
+func (c *Controller) rescanDirectory(dirPath string, root *model.Node, eventCh chan Event) {
+	parent := c.findNodeByPath(root, dirPath)
+	if parent == nil {
+		logging.Debug.Printf("Watcher: rescan dir not in tree: %s", dirPath)
+		return
+	}
+
+	// Get current children paths for comparison
+	oldChildren := make(map[string]*model.Node)
+	for _, child := range parent.Children {
+		oldChildren[child.Path] = child
+	}
+
+	// Read current directory contents
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		logging.Debug.Printf("Watcher: cannot read dir for rescan: %s: %v", dirPath, err)
+		return
+	}
+
+	// Find new entries
+	for _, entry := range entries {
+		childPath := filepath.Join(dirPath, entry.Name())
+		if _, exists := oldChildren[childPath]; exists {
+			continue // Already in tree
+		}
+
+		var node *model.Node
+		if entry.IsDir() {
+			// Directory - use scanner for recursive scan
+			w := scanner.NewWalker(4)
+			var err error
+			node, err = w.Scan(context.Background(), childPath)
+			if err != nil {
+				logging.Debug.Printf("Watcher: cannot scan new dir: %s: %v", childPath, err)
+				continue
+			}
+			node.ComputeSizes()
+		} else {
+			// File - create node directly
+			info, err := entry.Info()
+			if err != nil {
+				logging.Debug.Printf("Watcher: cannot stat new file: %s: %v", childPath, err)
+				continue
+			}
+			node = &model.Node{
+				Name:  entry.Name(),
+				Path:  childPath,
+				IsDir: false,
+				Size:  info.Size(),
+			}
+		}
+
+		node.IsNew = true
+		parent.AddChild(node)
+		logging.Debug.Printf("Watcher: CREATED: %s (size: %d, isDir: %v)", childPath, node.TotalSize(), node.IsDir)
+		logging.Debug.Printf("Watcher: Parent %s now has %d children", parent.Name, len(parent.Children))
+	}
+
+	c.mu.Lock()
+	diskFree := c.getDiskFree()
+	c.mu.Unlock()
+
+	eventCh <- CreationDetectedEvent{
+		Path:     dirPath,
+		DiskFree: diskFree,
+	}
+}
+
+// getDiskFree returns current free disk space (caller must hold lock)
+func (c *Controller) getDiskFree() int64 {
+	var watchPath string
+	if c.customPath != "" {
+		watchPath = c.customPath
+	} else if c.selectedDrive >= 0 && c.selectedDrive < len(c.drives) {
+		watchPath = c.drives[c.selectedDrive].Path
+	}
+	if watchPath == "" {
+		return 0
+	}
+	_, free := model.GetDiskSpace(watchPath)
+	return free
 }
 
 // findNodeByPath searches for a node by its path

@@ -16,7 +16,8 @@ func getPlatformDrives() ([]Drive, error) {
 	return getWindowsDrives()
 }
 
-func getDiskSpace(path string) (total, free int64) {
+// GetDiskSpace returns disk space information for a given path
+func GetDiskSpace(path string) (total, free int64) {
 	pathPtr, _ := syscall.UTF16PtrFromString(path)
 
 	var freeBytesAvailable, totalBytes, totalFreeBytes int64

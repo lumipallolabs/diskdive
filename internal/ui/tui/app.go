@@ -26,9 +26,10 @@ const (
 
 // Message types for Bubble Tea
 type (
-	scanStartMsg        struct{}
-	deletionDetectedMsg struct{ event core.DeletionDetectedEvent }
-	focusDebounceMsg    struct {
+	scanStartMsg         struct{}
+	deletionDetectedMsg  struct{ event core.DeletionDetectedEvent }
+	creationDetectedMsg  struct{ event core.CreationDetectedEvent }
+	focusDebounceMsg     struct {
 		version int
 		node    *model.Node
 	}
@@ -87,7 +88,7 @@ func NewApp(version string, scanPath string) App {
 		header:        NewHeader(drives, version),
 		tree:          NewTreePanel(),
 		treemap:       NewTreemapPanel(),
-		help:          NewHelpOverlay(),
+		help:          NewHelpOverlay(version),
 		driveSelector: NewDriveSelector(drives),
 		keys:          DefaultKeyMap(),
 		version:       version,
@@ -96,8 +97,6 @@ func NewApp(version string, scanPath string) App {
 
 	app.tree.SetFocused(true)
 	app.treemap.SetFocused(false)
-	app.tree.SetShowDiff(true)
-	app.treemap.SetShowDiff(true)
 
 	// Set up initial state
 	if scanPath != "" {
@@ -121,15 +120,13 @@ func NewApp(version string, scanPath string) App {
 
 // Init implements tea.Model
 func (a App) Init() tea.Cmd {
-	titleCmd := tea.SetWindowTitle("DISKDIVE")
-
 	// Start scanning if we have a target
 	if a.ctrl.CustomPath() != "" || (len(a.ctrl.Drives()) > 0 && !a.driveSelector.IsVisible()) {
-		return tea.Batch(titleCmd, func() tea.Msg {
+		return func() tea.Msg {
 			return scanStartMsg{}
-		})
+		}
 	}
-	return titleCmd
+	return nil
 }
 
 // Update implements tea.Model
@@ -156,7 +153,22 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case deletionDetectedMsg:
 		a.header.SetFreedStats(msg.event.SessionFreed, msg.event.TotalFreed)
-		// Continue listening for more deletions
+		if msg.event.DiskFree > 0 {
+			a.header.UpdateDiskFree(msg.event.DiskFree)
+		}
+		a.tree.RefreshVisible()
+		a.treemap.InvalidateCache()
+		return a, a.listenForWatcherEvents()
+
+	case creationDetectedMsg:
+		logging.Debug.Printf("[TUI] creationDetectedMsg received for path: %s", msg.event.Path)
+		if msg.event.DiskFree > 0 {
+			a.header.UpdateDiskFree(msg.event.DiskFree)
+		}
+		logging.Debug.Printf("[TUI] calling tree.RefreshVisible()")
+		a.tree.RefreshVisible()
+		a.treemap.InvalidateCache()
+		logging.Debug.Printf("[TUI] creationDetectedMsg processing complete")
 		return a, a.listenForWatcherEvents()
 
 	case focusDebounceMsg:
@@ -289,8 +301,11 @@ func (a App) listenForWatcherEvents() tea.Cmd {
 		if !ok {
 			return nil // Channel closed
 		}
-		if e, ok := event.(core.DeletionDetectedEvent); ok {
+		switch e := event.(type) {
+		case core.DeletionDetectedEvent:
 			return deletionDetectedMsg{event: e}
+		case core.CreationDetectedEvent:
+			return creationDetectedMsg{event: e}
 		}
 		return nil
 	}
@@ -298,12 +313,9 @@ func (a App) listenForWatcherEvents() tea.Cmd {
 
 // handleKey handles keyboard input
 func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Help overlay takes precedence
+	// Help overlay - any key closes it
 	if a.help.IsVisible() {
-		if key.Matches(msg, a.keys.Help) || key.Matches(msg, a.keys.Back) {
-			a.help.SetVisible(false)
-			return a, nil
-		}
+		a.help.SetVisible(false)
 		return a, nil
 	}
 
@@ -444,13 +456,6 @@ func (a App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.tree.Collapse()
 			a.updateLayout()
 		}
-		return a, nil
-
-	case key.Matches(msg, a.keys.ToggleDiff):
-		showDiff := a.ctrl.ToggleDiff()
-		a.tree.SetShowDiff(showDiff)
-		a.treemap.SetShowDiff(showDiff)
-		a.updateLayout()
 		return a, nil
 
 	case key.Matches(msg, a.keys.Rescan):

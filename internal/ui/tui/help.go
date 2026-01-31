@@ -6,19 +6,21 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const helpKeyColumnWidth = 12 // Width for key column in help text
+const helpKeyColumnWidth = 14 // Width for key column in help text (includes padding)
 
 // HelpOverlay displays keyboard shortcuts in a centered overlay
 type HelpOverlay struct {
 	visible bool
 	width   int
 	height  int
+	version string
 }
 
 // NewHelpOverlay creates a new help overlay component
-func NewHelpOverlay() HelpOverlay {
+func NewHelpOverlay(version string) HelpOverlay {
 	return HelpOverlay{
 		visible: false,
+		version: version,
 	}
 }
 
@@ -49,63 +51,58 @@ func (h HelpOverlay) View() string {
 		return ""
 	}
 
-	// Define styles for the overlay
+	// Define styles
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
-		Padding(1, 2)
-
-	titleStyle := lipgloss.NewStyle().
-		Foreground(ColorPrimary).
-		Bold(true).
-		MarginBottom(1)
+		Padding(1, 3)
 
 	sectionStyle := lipgloss.NewStyle().
 		Foreground(ColorMuted).
-		Bold(true).
 		MarginTop(1)
 
-	keyStyle := HelpKey
-	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#E4E4E7"))
+	keyStyle := HelpOverlayKey
+	descStyle := lipgloss.NewStyle().Foreground(ColorText)
+	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 
 	// Build help content
 	var content strings.Builder
 
-	content.WriteString(titleStyle.Render("Keyboard Shortcuts"))
+	// App name and version header
+	nameStyle := lipgloss.NewStyle().
+		Foreground(ColorPrimary).
+		Bold(true)
+	versionStyle := lipgloss.NewStyle().
+		Foreground(ColorMuted)
+
+	content.WriteString(nameStyle.Render("DISKDIVE"))
+	if h.version != "" {
+		content.WriteString(versionStyle.Render(" " + h.version))
+	}
 	content.WriteString("\n")
 
 	// Navigation section
-	content.WriteString(sectionStyle.Render("NAVIGATION"))
+	content.WriteString(sectionStyle.Render("Navigation"))
 	content.WriteString("\n")
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "arrows/hjkl", "Navigate", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "↑↓←→ hjkl", "Navigate", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "Enter", "Open directory", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "Esc / ⌫", "Go back", true))
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "PgUp/PgDn", "Scroll faster", true))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "g/G", "Jump to top/bottom", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "g / G", "Top / Bottom", true))
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "Tab", "Switch panel", true))
 
 	// Actions section
-	content.WriteString(sectionStyle.Render("ACTIONS"))
+	content.WriteString(sectionStyle.Render("Actions"))
 	content.WriteString("\n")
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "Enter", "Zoom into directory", true))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "Esc/⌫", "Go back / Close overlay", true))
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "Space", "Preview file", true))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "e", "Select drive", true))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "o", "Open in file manager", true))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "r", "Rescan drive", true))
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "d", "Toggle diff mode", true))
-
-	// Other section
-	content.WriteString(sectionStyle.Render("OTHER"))
-	content.WriteString("\n")
-	content.WriteString(formatHelpLine(keyStyle, descStyle, "?", "Toggle this help", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "e", "Change drive", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "o", "Open in Finder", true))
+	content.WriteString(formatHelpLine(keyStyle, descStyle, "r", "Rescan", true))
 	content.WriteString(formatHelpLine(keyStyle, descStyle, "q", "Quit", true))
 
-	// Diff colors section
-	content.WriteString(sectionStyle.Render("DIFF COLORS"))
+	// Footer
 	content.WriteString("\n")
-	content.WriteString(formatColorLine(ColorNew, "New item", true))
-	content.WriteString(formatColorLine(ColorGrew, "Size increased", true))
-	content.WriteString(formatColorLine(ColorShrunk, "Size decreased", true))
-	content.WriteString(formatColorLine(ColorMixed, "Mixed changes", false))
+	content.WriteString(dimStyle.Render("Press any key to close"))
 
 	box := boxStyle.Render(content.String())
 
@@ -122,16 +119,7 @@ func formatHelpLine(keyStyle, descStyle lipgloss.Style, key, desc string, newlin
 	return line
 }
 
-// formatColorLine formats a color indicator line
-func formatColorLine(color lipgloss.Color, desc string, newline bool) string {
-	colorStyle := lipgloss.NewStyle().Foreground(color)
-	descStyle := lipgloss.NewStyle().Foreground(ColorText)
-	line := colorStyle.Width(helpKeyColumnWidth).Render("████") + descStyle.Render(desc)
-	if newline {
-		return line + "\n"
-	}
-	return line
-}
+
 
 // HelpBar renders a bottom help bar with key hints
 func HelpBar(width int) string {

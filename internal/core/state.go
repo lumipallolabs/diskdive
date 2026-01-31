@@ -64,14 +64,12 @@ type TreeState struct {
 	Root     *model.Node
 	Selected *model.Node
 	Expanded map[string]bool // Path -> expanded
-	ShowDiff bool
 }
 
 // NewTreeState creates a new tree state
 func NewTreeState() *TreeState {
 	return &TreeState{
 		Expanded: make(map[string]bool),
-		ShowDiff: true,
 	}
 }
 

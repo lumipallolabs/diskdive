@@ -5,8 +5,5 @@ debug.log
 scanner.log
 build/
 .DS_Store
-*.command
-Screenshot*.png
-Screenshot*.jpg
 .env
 docs/internal/

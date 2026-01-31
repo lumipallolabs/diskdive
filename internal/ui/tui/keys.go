@@ -16,7 +16,6 @@ type KeyMap struct {
 	Enter        key.Binding
 	Back         key.Binding
 	Rescan       key.Binding
-	ToggleDiff   key.Binding
 	Help         key.Binding
 	Quit         key.Binding
 	SelectDrive  key.Binding
@@ -75,10 +74,6 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("r"),
 			key.WithHelp("r", "rescan"),
 		),
-		ToggleDiff: key.NewBinding(
-			key.WithKeys("d"),
-			key.WithHelp("d", "toggle diff"),
-		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
 			key.WithHelp("?", "help"),
@@ -113,7 +108,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.Left, k.Right},
 		{k.Top, k.Bottom, k.Tab},
 		{k.Enter, k.Back},
-		{k.Rescan, k.ToggleDiff},
+		{k.Rescan},
 		{k.Help, k.Quit},
 	}
 }
