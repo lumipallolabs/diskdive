@@ -61,13 +61,12 @@ func getWindowsDrives() ([]Drive, error) {
 }
 
 func getUnixMounts() ([]Drive, error) {
-	// Placeholder for future Linux support
-	// For now, just return root
-	home, _ := os.UserHomeDir()
-	if home == "" {
-		home = "/"
+	// For Linux, return root filesystem
+	drive := Drive{
+		Letter: "/",
+		Path:   "/",
+		Label:  runtime.GOOS,
 	}
-	return []Drive{
-		{Letter: runtime.GOOS, Path: home, Label: home},
-	}, nil
+	drive.TotalBytes, drive.FreeBytes = GetDiskSpace("/")
+	return []Drive{drive}, nil
 }
