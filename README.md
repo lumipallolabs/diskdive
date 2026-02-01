@@ -2,7 +2,7 @@
 
 A fast, terminal-based disk space analyzer with treemap visualization.
 
-![DiskDive Screenshot](https://placeholder-for-screenshot.png)
+![DiskDive Demo](assets/diskdive.gif)
 
 ## Features
 
