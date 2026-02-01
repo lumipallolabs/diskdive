@@ -90,7 +90,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 osascript <<EOF
 tell application "Terminal"
     activate
-    do script "cd ~ && \"$SCRIPT_DIR/diskdive\""
+    set newTab to do script ""
+    set winID to id of front window
+    do script "cd ~ && \"$SCRIPT_DIR/diskdive\" && (osascript -e 'tell application \"Terminal\" to close (first window whose id is " & winID & ")' &) && exit" in newTab
 end tell
 EOF
 LAUNCHER
