@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/samuli/diskdive/internal/model"
+	"github.com/lumipallolabs/diskdive/internal/model"
 )
 
 func TestSaveAndLoad(t *testing.T) {

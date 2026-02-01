@@ -1,4 +1,4 @@
-module github.com/samuli/diskdive
+module github.com/lumipallolabs/diskdive
 
 go 1.25.5
 

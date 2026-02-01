@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/samuli/diskdive/internal/logging"
-	"github.com/samuli/diskdive/internal/model"
+	"github.com/lumipallolabs/diskdive/internal/logging"
+	"github.com/lumipallolabs/diskdive/internal/model"
 )
 
 // ApplyDiff compares current scan against previous and populates diff fields

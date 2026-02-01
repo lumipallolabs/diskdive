@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/samuli/diskdive/internal/logging"
-	"github.com/samuli/diskdive/internal/model"
-	"github.com/samuli/diskdive/internal/scanner"
-	"github.com/samuli/diskdive/internal/stats"
-	"github.com/samuli/diskdive/internal/watcher"
+	"github.com/lumipallolabs/diskdive/internal/logging"
+	"github.com/lumipallolabs/diskdive/internal/model"
+	"github.com/lumipallolabs/diskdive/internal/scanner"
+	"github.com/lumipallolabs/diskdive/internal/stats"
+	"github.com/lumipallolabs/diskdive/internal/watcher"
 )
 
 

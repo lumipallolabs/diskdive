@@ -8,7 +8,7 @@ import (
 	"runtime/pprof"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/samuli/diskdive/internal/ui/tui"
+	"github.com/lumipallolabs/diskdive/internal/ui/tui"
 )
 
 func main() {

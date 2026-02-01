@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/samuli/diskdive/internal/model"
+	"github.com/lumipallolabs/diskdive/internal/model"
 )
 
 const headerProgressBarWidth = 20 // Width of disk usage progress bar

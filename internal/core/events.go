@@ -1,6 +1,6 @@
 package core
 
-import "github.com/samuli/diskdive/internal/model"
+import "github.com/lumipallolabs/diskdive/internal/model"
 
 // Event represents a state change from the controller
 type Event interface {

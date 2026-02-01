@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/samuli/diskdive/internal/model"
+	"github.com/lumipallolabs/diskdive/internal/model"
 )
 
 // DriveSelector displays a list of available drives for selection

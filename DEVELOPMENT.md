@@ -5,7 +5,7 @@
 Requires Go 1.21+.
 
 ```bash
-git clone https://github.com/samuli/diskdive.git
+git clone https://github.com/lumipallolabs/diskdive.git
 cd diskdive
 go build .
 go test ./...

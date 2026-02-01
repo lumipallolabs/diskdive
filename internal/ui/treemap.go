@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jeffwilliams/squarify"
-	"github.com/samuli/diskdive/internal/model"
+	"github.com/lumipallolabs/diskdive/internal/model"
 )
 
 // Block represents a rectangle in the treemap

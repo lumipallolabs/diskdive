@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samuli/diskdive/internal/model"
+	"github.com/lumipallolabs/diskdive/internal/model"
 )
 
 // Cache handles saving and loading scan results

@@ -15,13 +15,13 @@ A fast, terminal-based disk space analyzer with treemap visualization.
 ## Installation
 
 ```bash
-go install github.com/samuli/diskdive@latest
+go install github.com/lumipallolabs/diskdive@latest
 ```
 
 Or clone and build:
 
 ```bash
-git clone https://github.com/samuli/diskdive.git
+git clone https://github.com/lumipallolabs/diskdive.git
 cd diskdive
 go build .
 ```

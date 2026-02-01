@@ -6,8 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/samuli/diskdive/internal/logging"
-	"github.com/samuli/diskdive/internal/model"
+	"github.com/lumipallolabs/diskdive/internal/logging"
+	"github.com/lumipallolabs/diskdive/internal/model"
 )
 
 const treeSizeBarWidth = 4 // Width of size proportion bar [████]

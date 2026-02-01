@@ -3,7 +3,7 @@ package core
 import (
 	"time"
 
-	"github.com/samuli/diskdive/internal/model"
+	"github.com/lumipallolabs/diskdive/internal/model"
 )
 
 // ScanPhase represents the current phase of scanning

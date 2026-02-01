@@ -3,7 +3,7 @@ package cache
 import (
 	"testing"
 
-	"github.com/samuli/diskdive/internal/model"
+	"github.com/lumipallolabs/diskdive/internal/model"
 )
 
 func TestApplyDiff(t *testing.T) {

@@ -3,7 +3,7 @@ package scanner
 import (
 	"context"
 
-	"github.com/samuli/diskdive/internal/model"
+	"github.com/lumipallolabs/diskdive/internal/model"
 )
 
 // Progress reports scanning progress

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/jeffwilliams/squarify"
-	"github.com/samuli/diskdive/internal/model"
+	"github.com/lumipallolabs/diskdive/internal/model"
 )
 
 func TestSquarifyDirect(t *testing.T) {

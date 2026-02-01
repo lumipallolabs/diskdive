@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/charlievieth/fastwalk"
-	"github.com/samuli/diskdive/internal/model"
+	"github.com/lumipallolabs/diskdive/internal/model"
 )
 
 // Walker implements parallel filesystem scanning
