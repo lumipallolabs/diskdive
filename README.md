@@ -14,6 +14,12 @@ A fast, terminal-based disk space analyzer with treemap visualization.
 
 ## Installation
 
+### macOS (pre-built)
+
+Download the latest DMG from [Releases](https://github.com/lumipallolabs/diskdive/releases), open it, and drag DiskDive to Applications.
+
+### All platforms (requires Go 1.21+)
+
 ```bash
 go install github.com/lumipallolabs/diskdive@latest
 ```
