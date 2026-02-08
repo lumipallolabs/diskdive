@@ -1,30 +1,52 @@
-# DiskDive
+<p align="center">
+  <img src="assets/icon.png" width="128" alt="DiskDive icon">
+</p>
 
-A fast, terminal-based disk space analyzer with treemap visualization.
+<h1 align="center">DiskDive</h1>
 
-![DiskDive Demo](assets/diskdive.gif)
+<p align="center">
+  <strong>See where your disk space went — and take it back.</strong><br>
+  A fast, terminal-based disk space analyzer with treemap visualization.
+</p>
 
-## Features
+<p align="center">
+  <a href="https://github.com/lumipallolabs/diskdive/releases/latest"><img src="https://img.shields.io/github/v/release/lumipallolabs/diskdive" alt="Latest Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/lumipallolabs/diskdive" alt="License"></a>
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue" alt="Platforms">
+</p>
 
-- **Fast parallel scanning** - Scans large drives quickly using concurrent workers
-- **Treemap visualization** - See disk usage at a glance with proportional blocks
-- **Real-time deletion tracking** - Monitors filesystem and shows freed space
-- **Cross-platform** - Works on macOS, Windows, and Linux
-- **Vim-style navigation** - Navigate with arrow keys or hjkl
+<p align="center">
+  <img src="assets/diskdive.gif" alt="DiskDive Demo" width="720">
+</p>
+
+---
+
+## Why DiskDive?
+
+- **Blazing fast** — Parallel scanning makes short work of even the largest drives
+- **Treemap visualization** — Instantly spot the biggest space hogs with proportional blocks
+- **Real-time deletion tracking** — Delete files and watch your freed space update live
+- **Cross-platform** — Native support for macOS, Windows, and Linux
+- **Keyboard-driven** — Vim-style navigation for power users (`hjkl`, `/`, `g/G`)
+- **Zero config** — Just run it. No setup, no dependencies, no fuss
 
 ## Installation
 
-### macOS (pre-built)
+### macOS — Download the App
 
-Download the latest DMG from [Releases](https://github.com/lumipallolabs/diskdive/releases), open it, and drag DiskDive to Applications.
+The easiest way to get started. Universal binary (Intel + Apple Silicon).
 
-### All platforms (requires Go 1.21+)
+**[Download DiskDive.dmg](https://github.com/lumipallolabs/diskdive/releases/latest)** — Open the DMG, drag to Applications, done.
+
+### All Platforms — Install with Go
+
+Requires Go 1.21+:
 
 ```bash
 go install github.com/lumipallolabs/diskdive@latest
 ```
 
-Or clone and build:
+### Build from Source
 
 ```bash
 git clone https://github.com/lumipallolabs/diskdive.git
@@ -32,32 +54,27 @@ cd diskdive
 go build .
 ```
 
-## Usage
+## Quick Start
 
 ```bash
-# Scan a drive (interactive drive selector)
+# Launch with interactive drive selector
 diskdive
 
 # Scan a specific directory
 diskdive /path/to/directory
 ```
 
-### macOS
+On **macOS**, you can also double-click `DiskDive.app` from Finder — it opens in Terminal automatically.
 
-**From Finder:** Double-click `DiskDive.app` - opens in Terminal automatically.
+> **Tip:** Create a symlink for quick terminal access:
+> ```bash
+> ln -s /Applications/DiskDive.app/Contents/MacOS/diskdive /usr/local/bin/diskdive
+> ```
 
-**From Terminal:** The binary is inside the app bundle:
-```bash
-# Run directly
-/Applications/DiskDive.app/Contents/MacOS/diskdive
+<details>
+<summary><strong>Keyboard Controls</strong></summary>
 
-# Or create a symlink for convenience
-ln -s /Applications/DiskDive.app/Contents/MacOS/diskdive /usr/local/bin/diskdive
-```
-
-### Keyboard Controls
-
-#### Navigation
+### Navigation
 | Key | Action |
 |-----|--------|
 | `↑↓←→` or `hjkl` | Navigate |
@@ -65,7 +82,7 @@ ln -s /Applications/DiskDive.app/Contents/MacOS/diskdive /usr/local/bin/diskdive
 | `g/G` | Jump to top/bottom |
 | `Tab` | Switch between tree and treemap panels |
 
-#### Actions
+### Actions
 | Key | Action |
 |-----|--------|
 | `Enter` | Expand/zoom into directory |
@@ -75,20 +92,22 @@ ln -s /Applications/DiskDive.app/Contents/MacOS/diskdive /usr/local/bin/diskdive
 | `o` | Open in file manager |
 | `r` | Rescan current drive |
 
-#### Other
+### Other
 | Key | Action |
 |-----|--------|
 | `?` | Show help |
 | `q` | Quit |
 
+</details>
+
 ## Requirements
 
 - macOS 12+ / Windows 10+ / Linux
 
+## Contributing
+
+Contributions are welcome! See [DEVELOPMENT.md](DEVELOPMENT.md) for build instructions and architecture overview.
+
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE) for details.
-
-## Development
-
-See [DEVELOPMENT.md](DEVELOPMENT.md) for build instructions, architecture overview, and contribution guidelines.
+Apache License 2.0 — See [LICENSE](LICENSE) for details.
