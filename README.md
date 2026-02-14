@@ -38,6 +38,10 @@ The easiest way to get started. Universal binary (Intel + Apple Silicon).
 
 **[Download DiskDive.dmg](https://github.com/lumipallolabs/diskdive/releases/latest)** — Open the DMG, drag to Applications, done.
 
+### Windows — Download the Exe
+
+**[Download DiskDive.zip](https://github.com/lumipallolabs/diskdive/releases/latest)** — Extract `diskdive.exe` and run it directly, or add it to a folder on your PATH for easy access from any terminal.
+
 ### All Platforms — Install with Go
 
 Requires Go 1.21+:
